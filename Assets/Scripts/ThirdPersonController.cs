@@ -83,6 +83,7 @@ namespace StarterAssets
         // player
         private float _speed;
         private float _animationBlend;
+        float _targetRotation = 0.0f;
         private float _rotationVelocity;
         private float _verticalSpeed;
         private float _terminalVelocity = 53.0f;
@@ -233,7 +234,6 @@ namespace StarterAssets
             // if there is no input, set the target speed to 0
             if (_input.move == Vector2.zero) targetSpeed = 0.0f;
 
-            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
 
             // a reference to the players current horizontal velocity
             float currentHorizontalSpeed = getOrthogonalForwardFromUpAndForward(
@@ -269,42 +269,29 @@ namespace StarterAssets
 
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
             // if there is a move input rotate player when the player is moving
+            Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(transform.up);
             if (_input.move != Vector2.zero)
             {
                 Vector3 _mainCameraForward = getOrthogonalForwardFromUpAndForward(
                     transform.up,
                     _mainCamera.transform.forward
                     ).normalized;
-
-                Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(transform.up);
-
                 (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, _mainCameraForward);
                 (float _transformY, Vector3 _transformUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, transform.forward);
-
-                Debug.Log(
-                    string.Format(
-                        "refVector:{0}, _mainCameraY:{1}, _mainCameraUp:{2}, _transformY:{3}, _transformUp:{4}",
-                        refVectorOnVWPlane, _mainCameraY, _mainCameraUp, _transformY, _transformUp
-                        )
-                        );
-
-                float _targetRotation = Mathf.Atan2(_input.move.x, _input.move.y) * Mathf.Rad2Deg + _mainCameraY;
+                _targetRotation = Mathf.Atan2(_input.move.x, _input.move.y) * Mathf.Rad2Deg + _mainCameraY;
                 float rotation = Mathf.SmoothDampAngle(_transformY, _targetRotation, ref _rotationVelocity,
                     RotationSmoothTime);
-
                 Vector3 smoothedTargetDirection = Quaternion.AngleAxis(rotation, transform.up) * refVectorOnVWPlane;
-                Vector3 targetDirection = Quaternion.AngleAxis(_targetRotation, transform.up) * refVectorOnVWPlane;
-
-                // rotate to face input direction relative to camera position
                 transform.LookAt(transform.position + smoothedTargetDirection, transform.up);
-                // transform.rotation = Quaternion.AngleAxis(rotation, transform.up);
-
-                Vector3 _horizontalVelocity = targetDirection.normalized * _speed;
-
-                // move the player
-                // _rigidbody.AddForce(_horizontalVelocity + _verticalVelocity);
-                _controller.Move((_horizontalVelocity + _verticalVelocity) * Time.deltaTime);
             }
+            Vector3 targetDirection = Quaternion.AngleAxis(_targetRotation, transform.up) * refVectorOnVWPlane;
+
+            Vector3 _horizontalVelocity = targetDirection.normalized * _speed;
+            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
+
+            // move the player
+            // _rigidbody.AddForce(_horizontalVelocity + _verticalVelocity, ForceMode.Acceleration);
+            _controller.Move((_horizontalVelocity + _verticalVelocity) * Time.deltaTime);
 
             // update animator if using character
             if (_hasAnimator)
