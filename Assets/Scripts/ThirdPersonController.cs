@@ -1,6 +1,7 @@
 ﻿using UnityEngine;
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
 using UnityEngine.InputSystem;
+using System.Collections.Generic;
 #endif
 
 /* Note: animations are called via the controller for both the character and capsule using animator null checks
@@ -82,8 +83,7 @@ namespace StarterAssets
         // player
         private float _speed;
         private float _animationBlend;
-        private float _targetRotation = 0.0f;
-        private Vector3 _rotationVelocity;
+        private float _rotationVelocity;
         private float _verticalSpeed;
         private float _terminalVelocity = 53.0f;
 
@@ -103,6 +103,7 @@ namespace StarterAssets
 #endif
         private Animator _animator;
         private CharacterController _controller;
+        private Rigidbody _rigidbody;
         private StarterAssetsInputs _input;
         private GameObject _mainCamera;
 
@@ -138,6 +139,7 @@ namespace StarterAssets
 
             _hasAnimator = TryGetComponent(out _animator);
             _controller = GetComponent<CharacterController>();
+            _rigidbody = GetComponent<Rigidbody>();
             _input = GetComponent<StarterAssetsInputs>();
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
             _playerInput = GetComponent<PlayerInput>();
@@ -210,9 +212,15 @@ namespace StarterAssets
             CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
                 _cinemachineTargetYaw, 0.0f);
         }
-        Vector3 orthogonalForwardFromUpAndForward(Vector3 up, Vector3 forward)
+        Vector3 getOrthogonalForwardFromUpAndForward(Vector3 up, Vector3 forward)
         {
             return forward - Vector3.Dot(up, forward) * up;
+        }
+        Vector3 getAnOrthogonalVectorFromVector(Vector3 vector)
+        {
+            return (vector.x == 0 && vector.z == 0) ?
+            Vector3.forward :
+            new Vector3(-vector.z, 0, vector.x).normalized;
         }
         private void Move()
         {
@@ -228,8 +236,10 @@ namespace StarterAssets
             Vector3 _verticalVelocity = transform.up * _verticalSpeed;
 
             // a reference to the players current horizontal velocity
-            float currentHorizontalSpeed = orthogonalForwardFromUpAndForward(
-                transform.up, _controller.velocity
+            float currentHorizontalSpeed = getOrthogonalForwardFromUpAndForward(
+                transform.up,
+                // _rigidbody.velocity
+                _controller.velocity
                 ).magnitude;
 
             float speedOffset = 0.1f;
@@ -261,17 +271,39 @@ namespace StarterAssets
             // if there is a move input rotate player when the player is moving
             if (_input.move != Vector2.zero)
             {
-                Vector3 _mainCameraForward = orthogonalForwardFromUpAndForward(
+                Vector3 _mainCameraForward = getOrthogonalForwardFromUpAndForward(
                     transform.up,
                     _mainCamera.transform.forward
                     ).normalized;
-                float _rotationAngle = Mathf.Atan2(_input.move.x, _input.move.y) * Mathf.Rad2Deg;
-                Vector3 targetDirection = Quaternion.AngleAxis(_rotationAngle, transform.up) * _mainCameraForward;
-                Vector3 _dampForward = Vector3.SmoothDamp(transform.forward, targetDirection, ref _rotationVelocity, RotationSmoothTime);
-                transform.LookAt(transform.position + _dampForward, transform.up);
+
+                Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(transform.up);
+
+                (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, _mainCameraForward);
+                (float _transformY, Vector3 _transformUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, transform.forward);
+
+                Debug.Log(
+                    string.Format(
+                        "refVector:{0}, _mainCameraY:{1}, _mainCameraUp:{2}, _transformY:{3}, _transformUp:{4}",
+                        refVectorOnVWPlane, _mainCameraY, _mainCameraUp, _transformY, _transformUp
+                        )
+                        );
+
+                float _targetRotation = Mathf.Atan2(_input.move.x, _input.move.y) * Mathf.Rad2Deg + _mainCameraY;
+                float rotation = Mathf.SmoothDampAngle(_transformY, _targetRotation, ref _rotationVelocity,
+                    RotationSmoothTime);
+
+                Vector3 smoothedTargetDirection = Quaternion.AngleAxis(rotation, transform.up) * refVectorOnVWPlane;
+                Vector3 targetDirection = Quaternion.AngleAxis(_targetRotation, transform.up) * refVectorOnVWPlane;
+
+                // rotate to face input direction relative to camera position
+                transform.LookAt(transform.position + smoothedTargetDirection, transform.up);
+                // transform.rotation = Quaternion.AngleAxis(rotation, transform.up);
+
+                Vector3 _horizontalVelocity = targetDirection.normalized * _speed;
 
                 // move the player
-                _controller.Move((targetDirection.normalized * _speed + _verticalVelocity) * Time.deltaTime);
+                // _rigidbody.AddForce(_horizontalVelocity + _verticalVelocity);
+                _controller.Move((_horizontalVelocity + _verticalVelocity) * Time.deltaTime);
             }
 
             // update animator if using character
@@ -281,8 +313,27 @@ namespace StarterAssets
                 _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
             }
         }
+        (float, Vector3) getAngleBetweenTwoVectors(Vector3 fromDirection, Vector3 toDirection)
+        {
+            Quaternion rot2CameraForward = Quaternion.FromToRotation(fromDirection, toDirection);
+            float rotation = 0.0f;
+            Vector3 upAxis = Vector3.zero;
+            rot2CameraForward.ToAngleAxis(out rotation, out upAxis);
 
-        private void JumpAndGravity()
+            if (upAxis == -transform.up)
+            {
+                upAxis = transform.up;
+                rotation = 360.0f - rotation;
+            }
+            if (rotation > 180.0f)
+            {
+                rotation -= 360.0f;
+            }
+
+            return (rotation, upAxis);
+        }
+
+        void JumpAndGravity()
         {
             if (Grounded)
             {
