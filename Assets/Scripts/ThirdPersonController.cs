@@ -20,7 +20,7 @@ namespace StarterAssets
         public float MoveSpeed = 2.0f;
 
         [Tooltip("Sprint speed of the character in m/s")]
-        public float SprintSpeed = 5.335f;
+        public float SprintMultiplier = 5.335f;
 
         [Tooltip("How fast the character turns to face movement direction")]
         [Range(0.0f, 0.3f)]
@@ -161,6 +161,10 @@ namespace StarterAssets
 
             JumpAndGravity();
             GroundedCheck();
+        }
+
+        private void FixedUpdate()
+        {
             Move();
         }
 
@@ -226,7 +230,11 @@ namespace StarterAssets
         private void Move()
         {
             // set target speed based on move speed, sprint speed and if sprint is pressed
-            float targetSpeed = _input.sprint ? SprintSpeed : MoveSpeed;
+            float targetSpeed = MoveSpeed;
+            if (_input.sprint)
+            {
+                targetSpeed *= SprintMultiplier;
+            }
 
             // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
 
@@ -238,8 +246,8 @@ namespace StarterAssets
             // a reference to the players current horizontal velocity
             float currentHorizontalSpeed = getOrthogonalForwardFromUpAndForward(
                 transform.up,
-                // _rigidbody.velocity
-                _controller.velocity
+                _rigidbody.velocity
+                // _controller.velocity
                 ).magnitude;
 
             float speedOffset = 0.1f;
@@ -270,6 +278,9 @@ namespace StarterAssets
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
             // if there is a move input rotate player when the player is moving
             Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(transform.up);
+            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
+            // Vector3 _horizontalVelocity = Vector3.zero;
+
             if (_input.move != Vector2.zero)
             {
                 Vector3 _mainCameraForward = getOrthogonalForwardFromUpAndForward(
@@ -285,13 +296,14 @@ namespace StarterAssets
                 transform.LookAt(transform.position + smoothedTargetDirection, transform.up);
             }
             Vector3 targetDirection = Quaternion.AngleAxis(_targetRotation, transform.up) * refVectorOnVWPlane;
-
             Vector3 _horizontalVelocity = targetDirection.normalized * _speed;
-            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
+            Vector3 _velocity = _horizontalVelocity + _verticalVelocity;
+
+            Debug.Log(string.Format("_velocity:{0}", _velocity));
 
             // move the player
-            // _rigidbody.AddForce(_horizontalVelocity + _verticalVelocity, ForceMode.Acceleration);
-            _controller.Move((_horizontalVelocity + _verticalVelocity) * Time.deltaTime);
+            _rigidbody.velocity = _velocity;
+            // _controller.Move(_velocity * Time.deltaTime);
 
             // update animator if using character
             if (_hasAnimator)
