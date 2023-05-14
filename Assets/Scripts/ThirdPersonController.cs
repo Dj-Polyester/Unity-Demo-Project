@@ -81,7 +81,7 @@ namespace StarterAssets
         private float _cinemachineTargetPitch;
 
         // player
-        private float _speed;
+        private float _horizontalSpeed;
         private float _animationBlend;
         float _targetRotation = 0.0f;
         private float _rotationVelocity;
@@ -217,9 +217,14 @@ namespace StarterAssets
             CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
                 _cinemachineTargetYaw, 0.0f);
         }
-        Vector3 getOrthogonalForwardFromUpAndForward(Vector3 up, Vector3 forward)
+        Vector3 getOrthogonalUpFromUpAndForward(Vector3 forward, Vector3? up = null)
         {
-            return forward - Vector3.Dot(up, forward) * up;
+            Vector3 _up = (up == null) ? transform.up : (Vector3)up;
+            return Vector3.Dot(forward, _up) * _up;
+        }
+        Vector3 getOrthogonalForwardFromUpAndForward(Vector3 forward, Vector3? up = null)
+        {
+            return forward - getOrthogonalUpFromUpAndForward(forward, up);
         }
         Vector3 getAnOrthogonalVectorFromVector(Vector3 vector)
         {
@@ -231,10 +236,8 @@ namespace StarterAssets
         {
             // set target speed based on move speed, sprint speed and if sprint is pressed
             float targetSpeed = MoveSpeed;
-            if (_input.sprint)
-            {
-                targetSpeed *= SprintMultiplier;
-            }
+            if (_input.sprint) targetSpeed *= SprintMultiplier;
+
 
             // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
 
@@ -245,9 +248,7 @@ namespace StarterAssets
 
             // a reference to the players current horizontal velocity
             float currentHorizontalSpeed = getOrthogonalForwardFromUpAndForward(
-                transform.up,
                 _rigidbody.velocity
-                // _controller.velocity
                 ).magnitude;
 
             float speedOffset = 0.1f;
@@ -259,17 +260,24 @@ namespace StarterAssets
             {
                 // creates curved result rather than a linear one giving a more organic speed change
                 // note T in Lerp is clamped, so we don't need to clamp our speed
-                _speed = Mathf.Lerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
+                _horizontalSpeed = Mathf.Lerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
                     Time.deltaTime * SpeedChangeRate);
-
+                Debug.Log(
+                    string.Format(
+                        "currentHorizontalSpeed:{0}, targetSpeed:{1}, _speed:{2}",
+                        currentHorizontalSpeed,
+                        targetSpeed,
+                        _horizontalSpeed
+                    )
+                );
                 // round speed to 3 decimal places
-                _speed = Mathf.Round(_speed * 1000f) / 1000f;
+                _horizontalSpeed = Mathf.Round(_horizontalSpeed * 1000f) / 1000f;
             }
             else
             {
-                _speed = targetSpeed;
+                _horizontalSpeed = targetSpeed;
             }
-
+            // _speed = targetSpeed;
             _animationBlend = Mathf.Lerp(_animationBlend, targetSpeed, Time.deltaTime * SpeedChangeRate);
             if (_animationBlend < 0.01f) _animationBlend = 0f;
 
@@ -278,13 +286,10 @@ namespace StarterAssets
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
             // if there is a move input rotate player when the player is moving
             Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(transform.up);
-            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
-            // Vector3 _horizontalVelocity = Vector3.zero;
 
             if (_input.move != Vector2.zero)
             {
                 Vector3 _mainCameraForward = getOrthogonalForwardFromUpAndForward(
-                    transform.up,
                     _mainCamera.transform.forward
                     ).normalized;
                 (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, _mainCameraForward);
@@ -296,14 +301,12 @@ namespace StarterAssets
                 transform.LookAt(transform.position + smoothedTargetDirection, transform.up);
             }
             Vector3 targetDirection = Quaternion.AngleAxis(_targetRotation, transform.up) * refVectorOnVWPlane;
-            Vector3 _horizontalVelocity = targetDirection.normalized * _speed;
+            Vector3 _horizontalVelocity = targetDirection.normalized * _horizontalSpeed;
+            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
             Vector3 _velocity = _horizontalVelocity + _verticalVelocity;
-
-            Debug.Log(string.Format("_velocity:{0}", _velocity));
-
             // move the player
+            // _rigidbody.AddForce(_velocity, ForceMode.Acceleration);
             _rigidbody.velocity = _velocity;
-            // _controller.Move(_velocity * Time.deltaTime);
 
             // update animator if using character
             if (_hasAnimator)
@@ -349,7 +352,7 @@ namespace StarterAssets
                 // stop our velocity dropping infinitely when grounded
                 if (_verticalSpeed < 0.0f)
                 {
-                    _verticalSpeed = -2f;
+                    _verticalSpeed = 0.0f;
                 }
 
                 // Jump
@@ -392,13 +395,15 @@ namespace StarterAssets
 
                 // if we are not grounded, do not jump
                 _input.jump = false;
+                // apply gravity over time if under terminal 
+                // (multiply by delta time twice to linearly speed up over time)
+                // apply gravity if not grounded
+                if (_verticalSpeed < _terminalVelocity)
+                {
+                    _verticalSpeed += Gravity * Time.deltaTime;
+                }
             }
 
-            // apply gravity over time if under terminal (multiply by delta time twice to linearly speed up over time)
-            if (_verticalSpeed < _terminalVelocity)
-            {
-                _verticalSpeed += Gravity * Time.deltaTime;
-            }
         }
 
         private static float ClampAngle(float lfAngle, float lfMin, float lfMax)
