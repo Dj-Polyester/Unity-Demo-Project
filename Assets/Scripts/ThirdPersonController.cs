@@ -101,7 +101,8 @@ namespace StarterAssets
         float _targetRotation = 0.0f;
         private float _rotationVelocity;
         private float _terminalVelocity = 53.0f;
-        private Vector3 _up;
+        private Vector3 _upForOrientation;
+        private Vector3 _upForMovement;
         // collision detection
         public enum GroundedGizmoType_
         {
@@ -180,16 +181,18 @@ namespace StarterAssets
         private void Update()
         {
             _hasAnimator = TryGetComponent(out _animator);
-            _up = getUpVector();
-            GroundedCheck(_up);
-            SlopeCheck(_up);
+
+            _upForOrientation = transform.up;
+            _upForMovement = (_groundHit.normal == Vector3.zero) ? transform.up : _groundHit.normal;
+
+            GroundedCheck(_upForOrientation);
+            SlopeCheck(_upForOrientation);
             setVerticalSpeed();
         }
 
         private void FixedUpdate()
         {
-            // Debug.Log(string.Format("up:{0}", _up));
-            Move(_up);
+            Move(_upForOrientation, _upForMovement);
         }
 
         private void LateUpdate()
@@ -245,10 +248,10 @@ namespace StarterAssets
         {
             return (_groundHit.normal == Vector3.zero) ? transform.up : _groundHit.normal;
         }
-        private void GroundedCheck(Vector3 up)
+        private void GroundedCheck(Vector3 upForOrientation)
         {
             // set sphere position, with offset
-            Vector3 spherePosition = transform.position + up * GroundedOffset;
+            Vector3 spherePosition = transform.position + upForOrientation * GroundedOffset;
             Grounded = Physics.CheckSphere(spherePosition, GroundedRadius, GroundLayers,
                 QueryTriggerInteraction.Ignore);
 
@@ -258,12 +261,12 @@ namespace StarterAssets
                 _animator.SetBool(_animIDGrounded, Grounded);
             }
         }
-        private void SlopeCheck(Vector3 up)
+        private void SlopeCheck(Vector3 upForOrientation)
         {
             // set sphere position, with offset
             DownwardRayIntersects = Physics.Raycast(
-                transform.position + up * DownwardRayOffset,
-                -up,
+                transform.position + upForOrientation * DownwardRayOffset,
+                -upForOrientation,
                 out _groundHit, 2.0f * DownwardRayOffset, GroundLayers
             );
         }
@@ -289,17 +292,24 @@ namespace StarterAssets
                 _cinemachineTargetYaw, 0.0f);
         }
 
-        private void Move(Vector3 up)
+        private void Move(Vector3 upForOrientation, Vector3 upForMovement)
         {
             float inputMagnitude = 0.0f;
-            setHorizontalSpeed(out inputMagnitude, up);
-            Vector3 targetDirection = getHorizontalDirection(up);
-            // Debug.Log(string.Format("_horizontalSpeed:{0}, targetDirection:{1}", _horizontalSpeed, targetDirection));
-            // Debug.Log(string.Format("up:{0}, targetDirection:{1}", up, targetDirection));
+            setHorizontalSpeed(out inputMagnitude, upForMovement);
+            Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
 
             Vector3 _horizontalVelocity = targetDirection * _horizontalSpeed;
-            Vector3 _verticalVelocity = transform.up * _verticalSpeed;
+            Vector3 _verticalVelocity = upForOrientation * _verticalSpeed;
             Vector3 _velocity = _horizontalVelocity + _verticalVelocity;
+            Debug.Log(
+                string.Format(
+                    "_horizontalSpeed:{0}, _verticalSpeed:{1}, targetDirection:{2}, _velocity:{3}",
+                    _horizontalSpeed,
+                    _verticalSpeed,
+                    targetDirection,
+                    _velocity
+                    )
+                );
             // move the player
             _rigidbody.velocity = _velocity;
 
@@ -310,33 +320,34 @@ namespace StarterAssets
                 _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
             }
         }
-        Vector3 getHorizontalDirection(Vector3 up)
+        Vector3 getHorizontalDirection(Vector3 upForOrientation, Vector3 upForMovement)
         {
-            Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(up);
-            // Debug.Log(string.Format("up:{0}, refVectorOnVWPlane:{1}", up, refVectorOnVWPlane));
+            Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(upForOrientation);
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
             // if there is a move input rotate player when the player is moving
             if (_input.move != Vector2.zero)
             {
-                Vector3 _mainCameraForward = orthogonalizeForwardReturnForward(_mainCamera.transform.forward, up).normalized;
-                Debug.Log(string.Format("up:{0}, _mainCameraForward:{1}", up, _mainCameraForward));
+                Vector3 _mainCameraForward = orthogonalizeForwardReturnForward(_mainCamera.transform.forward, upForOrientation).normalized;
 
                 if (_mainCameraForward == Vector3.zero)
                 {
-                    _mainCameraForward = Vector3.Cross(up, transform.right).normalized;
+                    _mainCameraForward = Vector3.Cross(upForOrientation, transform.right).normalized;
                 }
 
                 (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, _mainCameraForward);
                 (float _transformY, Vector3 _transformUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, transform.forward);
                 _targetRotation = Mathf.Atan2(_input.move.x, _input.move.y) * Mathf.Rad2Deg + _mainCameraY;
-                float rotation = Mathf.SmoothDampAngle(_transformY, _targetRotation, ref _rotationVelocity,
+
+                float _smoothedTargetRotation = Mathf.SmoothDampAngle(_transformY, _targetRotation, ref _rotationVelocity,
                     RotationSmoothTime);
-                Vector3 smoothedTargetDirection = Quaternion.AngleAxis(rotation, up) * refVectorOnVWPlane;
-                transform.LookAt(transform.position + smoothedTargetDirection, up);
+                Vector3 smoothedTargetDirection = Quaternion.AngleAxis(_smoothedTargetRotation, upForOrientation) * refVectorOnVWPlane;
+                transform.LookAt(transform.position + smoothedTargetDirection, upForOrientation);
             }
-            return (Quaternion.AngleAxis(_targetRotation, up) * refVectorOnVWPlane).normalized;
+            Vector3 _targetDirectionForOrientation = (Quaternion.AngleAxis(_targetRotation, upForOrientation) * refVectorOnVWPlane).normalized;
+            Vector3 _targetDirectionForMovement = orthogonalizeForwardReturnForward(_targetDirectionForOrientation, upForMovement).normalized;
+            return _targetDirectionForMovement;
         }
-        void setHorizontalSpeed(out float inputMagnitude, in Vector3 up)
+        void setHorizontalSpeed(out float inputMagnitude, in Vector3 upForMovement)
         {
             inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
             // set target speed based on move speed, sprint speed and if sprint is pressed
@@ -350,7 +361,7 @@ namespace StarterAssets
             if (_input.move == Vector2.zero) targetSpeed = 0.0f;
 
             // a reference to the players current horizontal velocity
-            float currentHorizontalSpeed = orthogonalizeForwardReturnForward(_rigidbody.velocity, up).magnitude;
+            float currentHorizontalSpeed = orthogonalizeForwardReturnForward(_rigidbody.velocity, upForMovement).magnitude;
 
             float speedOffset = 0.1f;
 
