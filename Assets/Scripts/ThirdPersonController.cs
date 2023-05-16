@@ -9,7 +9,7 @@ using System.Collections.Generic;
 
 namespace StarterAssets
 {
-    [RequireComponent(typeof(CharacterController))]
+    [RequireComponent(typeof(Rigidbody))]
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
     [RequireComponent(typeof(PlayerInput))]
 #endif
@@ -95,8 +95,9 @@ namespace StarterAssets
         private float _cinemachineTargetPitch;
 
         // player
-        private float _horizontalSpeed;
-        private float _verticalSpeed;
+        private Vector3 _verticalVelocity;
+        private Vector3 _horizontalVelocity;
+        private Vector3 _gravity;
         private float _animationBlend;
         float _targetRotation = 0.0f;
         private float _rotationVelocity;
@@ -125,7 +126,6 @@ namespace StarterAssets
         private PlayerInput _playerInput;
 #endif
         private Animator _animator;
-        private CharacterController _controller;
         private Rigidbody _rigidbody;
         private StarterAssetsInputs _input;
         private GameObject _mainCamera;
@@ -161,7 +161,6 @@ namespace StarterAssets
             _cinemachineTargetYaw = CinemachineCameraTarget.transform.rotation.eulerAngles.y;
 
             _hasAnimator = TryGetComponent(out _animator);
-            _controller = GetComponent<CharacterController>();
             _rigidbody = GetComponent<Rigidbody>();
             _input = GetComponent<StarterAssetsInputs>();
             _renderer = PlayerMesh.GetComponent<SkinnedMeshRenderer>();
@@ -187,12 +186,13 @@ namespace StarterAssets
 
             GroundedCheck(_upForOrientation);
             SlopeCheck(_upForOrientation);
-            setVerticalSpeed();
         }
 
         private void FixedUpdate()
         {
-            Move(_upForOrientation, _upForMovement);
+            setVerticalVelocity(_upForOrientation);
+            setHorizontalVelocity(_upForOrientation, _upForMovement);
+            Move();
         }
 
         private void LateUpdate()
@@ -244,10 +244,6 @@ namespace StarterAssets
 
             return (rotation, upAxis);
         }
-        Vector3 getUpVector()
-        {
-            return (_groundHit.normal == Vector3.zero) ? transform.up : _groundHit.normal;
-        }
         private void GroundedCheck(Vector3 upForOrientation)
         {
             // set sphere position, with offset
@@ -292,35 +288,22 @@ namespace StarterAssets
                 _cinemachineTargetYaw, 0.0f);
         }
 
-        private void Move(Vector3 upForOrientation, Vector3 upForMovement)
+        private void Move()
         {
-            float inputMagnitude = 0.0f;
-            setHorizontalSpeed(out inputMagnitude, upForMovement);
-            Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
-
-            Vector3 _horizontalVelocity = targetDirection * _horizontalSpeed;
-            Vector3 _verticalVelocity = upForOrientation * _verticalSpeed;
             Vector3 _velocity = _horizontalVelocity + _verticalVelocity;
-            Debug.Log(
-                string.Format(
-                    "_horizontalSpeed:{0}, _verticalSpeed:{1}, targetDirection:{2}, _velocity:{3}",
-                    _horizontalSpeed,
-                    _verticalSpeed,
-                    targetDirection,
-                    _velocity
-                    )
-                );
+            // Debug.Log(
+            //     string.Format(
+            //         "_horizontalSpeed:{0}, _verticalSpeed:{1}, targetDirection:{2}, _velocity:{3}",
+            //         _horizontalSpeed,
+            //         _verticalVelocity,
+            //         targetDirection,
+            //         _velocity
+            //         )
+            //     );
             // move the player
             _rigidbody.velocity = _velocity;
-
-            // update animator if using character
-            if (_hasAnimator)
-            {
-                _animator.SetFloat(_animIDSpeed, _animationBlend);
-                _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
-            }
         }
-        Vector3 getHorizontalDirection(Vector3 upForOrientation, Vector3 upForMovement)
+        Vector3 getHorizontalDirection(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
             Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(upForOrientation);
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
@@ -347,9 +330,10 @@ namespace StarterAssets
             Vector3 _targetDirectionForMovement = orthogonalizeForwardReturnForward(_targetDirectionForOrientation, upForMovement).normalized;
             return _targetDirectionForMovement;
         }
-        void setHorizontalSpeed(out float inputMagnitude, in Vector3 upForMovement)
+        void setHorizontalVelocity(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
-            inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
+            float _horizontalSpeed;
+            float inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
             // set target speed based on move speed, sprint speed and if sprint is pressed
             float targetSpeed = MoveSpeed;
             if (_input.sprint) targetSpeed *= SprintMultiplier;
@@ -382,8 +366,19 @@ namespace StarterAssets
             }
             _animationBlend = Mathf.Lerp(_animationBlend, targetSpeed, Time.deltaTime * SpeedChangeRate);
             if (_animationBlend < 0.01f) _animationBlend = 0f;
+
+            // update animator if using character
+            if (_hasAnimator)
+            {
+                _animator.SetFloat(_animIDSpeed, _animationBlend);
+                _animator.SetFloat(_animIDMotionSpeed, inputMagnitude);
+            }
+
+            Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
+
+            _horizontalVelocity = targetDirection * _horizontalSpeed;
         }
-        void setVerticalSpeed()
+        void setVerticalVelocity(Vector3 upForOrientation)
         {
             if (Grounded)
             {
@@ -397,18 +392,21 @@ namespace StarterAssets
                     _animator.SetBool(_animIDFreeFall, false);
                 }
 
-                // stop our velocity dropping infinitely when grounded
-                if (_verticalSpeed < 0.0f)
+                Vector3 _gravityUp = orthogonalizeForwardReturnUp(Gravity, upForOrientation);
+                if (_gravityUp.normalized == -upForOrientation.normalized)
                 {
-                    _verticalSpeed = 0.0f;
+                    _gravity = Gravity - _gravityUp;
                 }
-
+                Vector3 _verticalVelocityUp = orthogonalizeForwardReturnUp(_verticalVelocity, upForOrientation);
+                if (_verticalVelocityUp.normalized == -upForOrientation.normalized)
+                {
+                    _verticalVelocity -= _verticalVelocityUp;
+                }
                 // Jump
                 if (_input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
                     // the square root of H * -2 * G = how much velocity needed to reach desired height
-                    _verticalSpeed = Mathf.Sqrt(2f * JumpHeight * Gravity.magnitude);
-
+                    _verticalVelocity = Mathf.Sqrt(2f * JumpHeight * Gravity.magnitude) * upForOrientation;
                     // update animator if using character
                     if (_hasAnimator)
                     {
@@ -441,16 +439,11 @@ namespace StarterAssets
                     }
                 }
 
-                // apply gravity over time if under terminal 
-                // (multiply by delta time twice to linearly speed up over time)
-                // apply gravity if not grounded
-                if (_verticalSpeed < _terminalVelocity)
-                {
-                    _verticalSpeed -= Gravity.magnitude * Time.deltaTime;
-                }
+                _gravity = Gravity;
+                // if we are not grounded, do not jump
+                _input.jump = false;
             }
-            // if we are not grounded, do not jump
-            _input.jump = false;
+            _verticalVelocity += _gravity * Time.deltaTime;
         }
 
         private static float ClampAngle(float lfAngle, float lfMin, float lfMax)
@@ -501,7 +494,7 @@ namespace StarterAssets
                 if (FootstepAudioClips.Length > 0)
                 {
                     var index = Random.Range(0, FootstepAudioClips.Length);
-                    AudioSource.PlayClipAtPoint(FootstepAudioClips[index], transform.TransformPoint(_controller.center), FootstepAudioVolume);
+                    AudioSource.PlayClipAtPoint(FootstepAudioClips[index], transform.TransformPoint(_rigidbody.position), FootstepAudioVolume);
                 }
             }
         }
@@ -510,7 +503,7 @@ namespace StarterAssets
         {
             if (animationEvent.animatorClipInfo.weight > 0.5f)
             {
-                AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_controller.center), FootstepAudioVolume);
+                AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_rigidbody.position), FootstepAudioVolume);
             }
         }
     }
