@@ -17,7 +17,7 @@ namespace StarterAssets
     {
         [Header("Player")]
         [Tooltip("Mesh (Geometric interpretation) of the player to deduce info such as size")]
-        public GameObject PlayerMesh;
+        public GameObject ArmatureMesh;
 
         [Tooltip("Move speed of the character in m/s")]
         public float MoveSpeed = 2.0f;
@@ -31,6 +31,10 @@ namespace StarterAssets
 
         [Tooltip("Acceleration and deceleration")]
         public float SpeedChangeRate = 10.0f;
+        [Tooltip("Up vector used for orientation. Up vector for movement is calculated using the ground normal")]
+        public Vector3 UpForOrientation = Vector3.up;
+        [Tooltip("Forward vector used for orientation.")]
+        public Vector3 ForwardForOrientation = Vector3.forward;
 
         public AudioClip LandingAudioClip;
         public AudioClip[] FootstepAudioClips;
@@ -41,7 +45,7 @@ namespace StarterAssets
         public float JumpHeight = 1.2f;
 
         [Tooltip("The character uses its own gravity value. The engine default is -9.81f")]
-        public Vector3 Gravity = Vector3.up * -15.0f;
+        public Vector3 Gravity = Physics.gravity;
 
         [Space(10)]
         [Tooltip("Time required to pass before being able to jump again. Set to 0f to instantly jump again")]
@@ -87,7 +91,7 @@ namespace StarterAssets
         public bool LockCameraPosition = false;
 
         [Header("General")]
-        [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
+        [Tooltip("Generic epsilon value used for approximations to alleviate floating point errors")]
         public float Epsilon = 0.001f;
 
         // cinemachine
@@ -101,9 +105,10 @@ namespace StarterAssets
         private float _animationBlend;
         float _targetRotation = 0.0f;
         private float _rotationVelocity;
-        private float _terminalVelocity = 53.0f;
         private Vector3 _upForOrientation;
+        private Vector3 _upForOrientationCamera;
         private Vector3 _upForMovement;
+        private Vector3 _refVectorOnVWPlane = Vector3.zero;
         // collision detection
         public enum GroundedGizmoType_
         {
@@ -146,13 +151,16 @@ namespace StarterAssets
             }
         }
 
-
         private void Awake()
         {
             // get a reference to our main camera
             if (_mainCamera == null)
             {
                 _mainCamera = GameObject.FindGameObjectWithTag("MainCamera");
+            }
+            if (ArmatureMesh == null)
+            {
+                ArmatureMesh = GameObject.FindGameObjectWithTag("ArmatureMesh");
             }
         }
 
@@ -163,7 +171,7 @@ namespace StarterAssets
             _hasAnimator = TryGetComponent(out _animator);
             _rigidbody = GetComponent<Rigidbody>();
             _input = GetComponent<StarterAssetsInputs>();
-            _renderer = PlayerMesh.GetComponent<SkinnedMeshRenderer>();
+            _renderer = ArmatureMesh.GetComponent<SkinnedMeshRenderer>();
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
             _playerInput = GetComponent<PlayerInput>();
 #else   
@@ -175,6 +183,8 @@ namespace StarterAssets
             // reset our timeouts on start
             _jumpTimeoutDelta = JumpTimeout;
             _fallTimeoutDelta = FallTimeout;
+
+            Orient();
         }
 
         private void Update()
@@ -182,10 +192,11 @@ namespace StarterAssets
             _hasAnimator = TryGetComponent(out _animator);
 
             _upForOrientation = transform.up;
-            _upForMovement = (_groundHit.normal == Vector3.zero) ? transform.up : _groundHit.normal;
+            _upForMovement = (_groundHit.normal == Vector3.zero) ? _upForOrientation : _groundHit.normal;
 
             GroundedCheck(_upForOrientation);
             SlopeCheck(_upForOrientation);
+            UpdateCameraPosition();
         }
 
         private void FixedUpdate()
@@ -197,7 +208,19 @@ namespace StarterAssets
 
         private void LateUpdate()
         {
-            CameraRotation();
+            CameraRotation(_upForOrientation);
+        }
+
+        private void UpdateCameraPosition()
+        {
+            float playerHeightHalf = _renderer.bounds.size.y / 2;
+            CinemachineCameraTarget.transform.position = transform.position + _upForOrientation * playerHeightHalf;
+        }
+
+        private void Orient()
+        {
+            transform.LookAt(transform.position + ForwardForOrientation, UpForOrientation);
+            _upForOrientationCamera = transform.up;
         }
 
         private void AssignAnimationIDs()
@@ -209,23 +232,23 @@ namespace StarterAssets
             _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
         }
 
-        Vector3 orthogonalizeForwardReturnUp(Vector3 forward, Vector3 up)
+        Vector3 orthogonalizeForwardReturnUp(in Vector3 forward, in Vector3 up)
         {
             return Vector3.Dot(forward, up) * up;
         }
-        Vector3 orthogonalizeForwardReturnForward(Vector3 forward, Vector3 up)
+        Vector3 orthogonalizeForwardReturnForward(in Vector3 forward, in Vector3 up)
         {
             return forward - orthogonalizeForwardReturnUp(forward, up);
         }
-        Vector3 getAnOrthogonalVectorFromVector(Vector3 vector)
+        Vector3 getAnOrthogonalVectorFromVector(in Vector3 vector)
         {
-            if (vector.x < Epsilon && vector.z < Epsilon)
+            if (Mathf.Abs(vector.x) < Epsilon && Mathf.Abs(vector.z) < Epsilon)
             {
                 return Vector3.forward;
             }
             return new Vector3(-vector.z, 0, vector.x).normalized;
         }
-        (float, Vector3) getAngleBetweenTwoVectors(Vector3 fromDirection, Vector3 toDirection)
+        (float, Vector3) getAngleBetweenTwoVectors(in Vector3 fromDirection, in Vector3 toDirection)
         {
             Quaternion rot2CameraForward = Quaternion.FromToRotation(fromDirection, toDirection);
             float rotation = 0.0f;
@@ -244,7 +267,7 @@ namespace StarterAssets
 
             return (rotation, upAxis);
         }
-        private void GroundedCheck(Vector3 upForOrientation)
+        private void GroundedCheck(in Vector3 upForOrientation)
         {
             // set sphere position, with offset
             Vector3 spherePosition = transform.position + upForOrientation * GroundedOffset;
@@ -257,7 +280,7 @@ namespace StarterAssets
                 _animator.SetBool(_animIDGrounded, Grounded);
             }
         }
-        private void SlopeCheck(Vector3 upForOrientation)
+        private void SlopeCheck(in Vector3 upForOrientation)
         {
             // set sphere position, with offset
             DownwardRayIntersects = Physics.Raycast(
@@ -267,7 +290,14 @@ namespace StarterAssets
             );
         }
 
-        private void CameraRotation()
+        private static float ClampAngle(float lfAngle, float lfMin = float.MinValue, float lfMax = float.MaxValue)
+        {
+            if (lfAngle < -360f) lfAngle += 360f;
+            if (lfAngle > 360f) lfAngle -= 360f;
+            return Mathf.Clamp(lfAngle, lfMin, lfMax);
+        }
+
+        private void CameraRotation(in Vector3 upForOrientation)
         {
             // if there is an input and camera position is not fixed
             if (_input.look.sqrMagnitude >= _threshold && !LockCameraPosition)
@@ -280,53 +310,61 @@ namespace StarterAssets
             }
 
             // clamp our rotations so our values are limited 360 degrees
-            _cinemachineTargetYaw = ClampAngle(_cinemachineTargetYaw, float.MinValue, float.MaxValue);
+            _cinemachineTargetYaw = ClampAngle(_cinemachineTargetYaw);
             _cinemachineTargetPitch = ClampAngle(_cinemachineTargetPitch, BottomClamp, TopClamp);
 
-            // Cinemachine will follow this target
-            CinemachineCameraTarget.transform.rotation = Quaternion.Euler(_cinemachineTargetPitch + CameraAngleOverride,
-                _cinemachineTargetYaw, 0.0f);
+            Vector3 _newRight = orthogonalizeForwardReturnForward(
+                CinemachineCameraTarget.transform.right,
+                upForOrientation
+                );
+            // Debug.Log(string.Format("upForOrientation: {0}, _newRight: {1}", upForOrientation, _newRight));
+            Debug.Log(string.Format("upForOrientation: {0}, CinemachineCameraTarget.transform.right: {1}", upForOrientation, CinemachineCameraTarget.transform.right));
+            Quaternion _transformCam =
+            Quaternion.AngleAxis(
+                _cinemachineTargetPitch + CameraAngleOverride,
+                CinemachineCameraTarget.transform.right
+            ) * Quaternion.AngleAxis(_cinemachineTargetYaw, upForOrientation);
+
+
+            Vector3 _newForward = _transformCam * _refVectorOnVWPlane;
+            Vector3 _newUp = _transformCam * upForOrientation;
+
+            CinemachineCameraTarget.transform.LookAt(
+                CinemachineCameraTarget.transform.position + _newForward,
+                _newUp
+                );
         }
 
         private void Move()
         {
             Vector3 _velocity = _horizontalVelocity + _verticalVelocity;
-            // Debug.Log(
-            //     string.Format(
-            //         "_horizontalSpeed:{0}, _verticalSpeed:{1}, targetDirection:{2}, _velocity:{3}",
-            //         _horizontalSpeed,
-            //         _verticalVelocity,
-            //         targetDirection,
-            //         _velocity
-            //         )
-            //     );
             // move the player
             _rigidbody.velocity = _velocity;
         }
         Vector3 getHorizontalDirection(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
-            Vector3 refVectorOnVWPlane = getAnOrthogonalVectorFromVector(upForOrientation);
+            _refVectorOnVWPlane = getAnOrthogonalVectorFromVector(upForOrientation);
+
             // note: Vector2's != operator uses approximation so is not floating point error prone, and is cheaper than magnitude
             // if there is a move input rotate player when the player is moving
             if (_input.move != Vector2.zero)
             {
                 Vector3 _mainCameraForward = orthogonalizeForwardReturnForward(_mainCamera.transform.forward, upForOrientation).normalized;
-
                 if (_mainCameraForward == Vector3.zero)
                 {
                     _mainCameraForward = Vector3.Cross(upForOrientation, transform.right).normalized;
                 }
 
-                (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, _mainCameraForward);
-                (float _transformY, Vector3 _transformUp) = getAngleBetweenTwoVectors(refVectorOnVWPlane, transform.forward);
+                (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(_refVectorOnVWPlane, _mainCameraForward);
+                (float _transformY, Vector3 _transformUp) = getAngleBetweenTwoVectors(_refVectorOnVWPlane, transform.forward);
                 _targetRotation = Mathf.Atan2(_input.move.x, _input.move.y) * Mathf.Rad2Deg + _mainCameraY;
 
                 float _smoothedTargetRotation = Mathf.SmoothDampAngle(_transformY, _targetRotation, ref _rotationVelocity,
                     RotationSmoothTime);
-                Vector3 smoothedTargetDirection = Quaternion.AngleAxis(_smoothedTargetRotation, upForOrientation) * refVectorOnVWPlane;
+                Vector3 smoothedTargetDirection = Quaternion.AngleAxis(_smoothedTargetRotation, upForOrientation) * _refVectorOnVWPlane;
                 transform.LookAt(transform.position + smoothedTargetDirection, upForOrientation);
             }
-            Vector3 _targetDirectionForOrientation = (Quaternion.AngleAxis(_targetRotation, upForOrientation) * refVectorOnVWPlane).normalized;
+            Vector3 _targetDirectionForOrientation = (Quaternion.AngleAxis(_targetRotation, upForOrientation) * _refVectorOnVWPlane).normalized;
             Vector3 _targetDirectionForMovement = orthogonalizeForwardReturnForward(_targetDirectionForOrientation, upForMovement).normalized;
             return _targetDirectionForMovement;
         }
@@ -375,10 +413,9 @@ namespace StarterAssets
             }
 
             Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
-
             _horizontalVelocity = targetDirection * _horizontalSpeed;
         }
-        void setVerticalVelocity(Vector3 upForOrientation)
+        void setVerticalVelocity(in Vector3 upForOrientation)
         {
             if (Grounded)
             {
@@ -446,18 +483,13 @@ namespace StarterAssets
             _verticalVelocity += _gravity * Time.deltaTime;
         }
 
-        private static float ClampAngle(float lfAngle, float lfMin, float lfMax)
-        {
-            if (lfAngle < -360f) lfAngle += 360f;
-            if (lfAngle > 360f) lfAngle -= 360f;
-            return Mathf.Clamp(lfAngle, lfMin, lfMax);
-        }
+
 
         private void OnDrawGizmosSelected()
         {
             if (_renderer == null)
             {
-                _renderer = PlayerMesh.GetComponent<SkinnedMeshRenderer>();
+                _renderer = ArmatureMesh.GetComponent<SkinnedMeshRenderer>();
             }
             Color transparentGreen = new Color(0.0f, 1.0f, 0.0f, 0.35f);
             Color transparentRed = new Color(1.0f, 0.0f, 0.0f, 0.35f);
