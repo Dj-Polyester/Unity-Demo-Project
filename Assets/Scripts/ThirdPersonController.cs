@@ -243,6 +243,7 @@ namespace StarterAssets
             if (ClimbRayIntersects && _climbTimeoutDelta <= 0.0f)
             {
                 upForMovement = vectorCleaned(_climbHit.normal);
+                zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
                 OrientWithGravity(out upForOrientation, upForMovement);
                 _climbTimeoutDelta = ClimbTimeout;
             }
@@ -253,6 +254,7 @@ namespace StarterAssets
                 )
             {
                 upForMovement = _orientHit.normal;
+                zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
                 OrientWithGravity(out upForOrientation, upForMovement);
             }
             _climbTimeoutDelta -= Time.deltaTime;
@@ -529,18 +531,8 @@ namespace StarterAssets
                     _animator.SetBool(_animIDJump, false);
                     _animator.SetBool(_animIDFreeFall, false);
                 }
-
-                Vector3 _gravityUp = orthogonalizeForwardReturnUp(Gravity, upForOrientation);
-                if (_gravityUp.normalized == -upForOrientation.normalized)
-                {
-                    _gravity = Gravity - _gravityUp;
-                }
-                Vector3 _verticalVelocityUp = orthogonalizeForwardReturnUp(_verticalVelocity, upForOrientation);
-                if (_verticalVelocityUp.normalized == -upForOrientation.normalized)
-                {
-                    _verticalVelocity -= _verticalVelocityUp;
-                }
-                Debug.Log(_verticalVelocity);
+                zeroOutOrientationDirection(ref _gravity, Gravity, upForOrientation);
+                zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
                 // Jump
                 if (_input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
@@ -586,7 +578,18 @@ namespace StarterAssets
             _verticalVelocity += _gravity * Time.deltaTime;
         }
 
-
+        private void zeroOutOrientationDirection(
+            ref Vector3 vector,
+            in Vector3 value2subtractFrom,
+            in Vector3 upForOrientation
+            )
+        {
+            Vector3 _vectorUp = orthogonalizeForwardReturnUp(value2subtractFrom, upForOrientation);
+            if (_vectorUp.normalized == -upForOrientation.normalized)
+            {
+                vector = value2subtractFrom - _vectorUp;
+            }
+        }
 
         private void OnDrawGizmosSelected()
         {
