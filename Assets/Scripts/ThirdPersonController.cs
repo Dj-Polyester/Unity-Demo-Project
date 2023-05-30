@@ -530,16 +530,19 @@ namespace StarterAssets
                     _animator.SetBool(_animIDFreeFall, false);
                 }
 
-                Vector3 _gravityUp = orthogonalizeForwardReturnUp(Gravity, upForOrientation);
-                if (_gravityUp.normalized == -upForOrientation.normalized)
-                {
-                    _gravity = Gravity - _gravityUp;
-                }
+                // Vector3 _gravityUp = orthogonalizeForwardReturnUp(Gravity, upForOrientation);
+                // if (_gravityUp.normalized == -upForOrientation.normalized)
+                // {
+                //     _gravity = Vector3.zero;
+                //     // _gravity = Gravity - _gravityUp;
+                // }
                 Vector3 _verticalVelocityUp = orthogonalizeForwardReturnUp(_verticalVelocity, upForOrientation);
                 if (_verticalVelocityUp.normalized == -upForOrientation.normalized)
                 {
+                    // _verticalVelocity = Vector3.zero;
                     _verticalVelocity -= _verticalVelocityUp;
                 }
+                Debug.Log(_verticalVelocity);
                 // Jump
                 if (_input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
