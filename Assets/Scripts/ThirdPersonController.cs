@@ -50,11 +50,10 @@ namespace StarterAssets
         [Space(10)]
         [Tooltip("Time required to pass before being able to jump again. Set to 0f to instantly jump again")]
         public float JumpTimeout = 0.50f;
-
         [Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
         public float FallTimeout = 0.15f;
-        [Tooltip("Time required to pass before being able to climb again. Set to 0f to instantly climb again")]
-        public float ClimbTimeout = 1.0f;
+        [Tooltip("Time required to pass before being able to climb again.")]
+        public float ClimbTimeout = 0.15f;
 
         [Header("Rigidbody Control and Gizmo Variables")]
         [Tooltip("Whether to show grounded check sphere gizmo")]
@@ -69,34 +68,34 @@ namespace StarterAssets
         public bool Grounded = true;
         [Tooltip("Downward ray used for slope check.")]
         public bool SlopeRayIntersects = true;
-        [Tooltip("Downward ray used for orient check.")]
-        public bool OrientRayIntersects = true;
         [Tooltip("Forward ray used for climb check.")]
         public bool ClimbRayIntersects = true;
+        [Tooltip("Downward ray used for orient check.")]
+        public bool OrientRayIntersects = true;
 
         [Tooltip("Useful for rough ground (positive)")]
         public float GroundedOffset = 0.1f;
-
-        [Tooltip("A downward ray is casted between two points of distance twice this point")]
-        public float SlopeRayOffset = 0.1f;
-
-        [Tooltip("Useful for orienting while climbing (positive)")]
-        public float OrientOffset = 0.1f;
-
         [Tooltip("The radius of the grounded check. Should match the radius of the CapsuleCollider")]
         public float GroundedRadius = 0.16f;
-
-        [Tooltip("The radius of the orient check. Should be more than the radius of the CapsuleCollider")]
-        public float OrientRadius = 0.4f;
+        [Tooltip("Upward offset from which the slope ray is fired from")]
+        public float SlopeRayOffset = 0.1f;
+        [Tooltip("Length of the slope ray. Should be more than jump height")]
+        public float SlopeRayLength = 1f;
 
         [Tooltip("What layers the character uses as ground")]
         public LayerMask GroundLayers;
 
-        [Header("Player Climbing")]
-        [Tooltip("Useful for climbing (positive)")]
-        public float ClimbOffset = 0.1f;
-        [Tooltip("Orient While Climbing?")]
-        public bool OrientWhileClimbing = true;
+        [Header("Climb")]
+        [Tooltip("Upward offset from which the climb ray is fired from")]
+        public float ClimbRayOffset = 0.1f;
+        [Tooltip("Length of the climb ray")]
+        public float ClimbRayLength = 1f;
+        [Tooltip("Upward offset from which the orient ray is fired from")]
+        public float OrientRayOffset = 0.5f;
+        [Tooltip("Length of the orient ray")]
+        public float OrientRayLength = 0.5f;
+        [Tooltip("The radius of the orient check. Should be more than the radius of the CapsuleCollider")]
+        public float OrientRadius = 0.2f;
 
         [Header("Cinemachine")]
         [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
@@ -133,13 +132,13 @@ namespace StarterAssets
         private Vector3 _upForMovement;
         private Vector3 _refVectorOnVWPlane = Vector3.zero;
         // collision detection
-        RaycastHit _groundHit;
+        RaycastHit _slopeHit;
         RaycastHit _climbHit;
         RaycastHit _orientHit;
         // timeout deltatime
-        private float _climbTimeoutDelta;
         private float _jumpTimeoutDelta;
         private float _fallTimeoutDelta;
+        private float _climbTimeoutDelta;
 
         // animation IDs
         private int _animIDSpeed;
@@ -216,6 +215,7 @@ namespace StarterAssets
             GroundedCheck(_upForOrientation);
             SlopeCheck(_upForOrientation);
             ClimbCheck(_upForOrientation);
+            OrientCheck(_upForOrientation);
 
             SetUpForMovement(ref _upForOrientation, out _upForMovement);
             UpdateCameraPosition();
@@ -236,25 +236,24 @@ namespace StarterAssets
         private void SetUpForMovement(ref Vector3 upForOrientation, out Vector3 upForMovement)
         {
             upForMovement =
-            (_groundHit.normal == Vector3.zero) ?
+            (_slopeHit.normal == Vector3.zero) ?
             upForOrientation :
-            _groundHit.normal;
+            _slopeHit.normal;
 
             if (ClimbRayIntersects && _climbTimeoutDelta <= 0.0f)
             {
-                Vector3 _climbhitNormalClean = vectorCleaned(_climbHit.normal);
-                // Debug.Log(string.Format("{0} {1}", _climbHit.normal, _climbhitNormalClean));
-                upForMovement = _climbhitNormalClean;
-
-                if (OrientWhileClimbing)
-                {
-                    OrientWithGravity(out upForOrientation, upForMovement);
-                }
+                upForMovement = vectorCleaned(_climbHit.normal);
+                OrientWithGravity(out upForOrientation, upForMovement);
                 _climbTimeoutDelta = ClimbTimeout;
             }
-            if (OrientRayIntersects)
+            else if (
+                !SlopeRayIntersects &&
+                OrientRayIntersects &&
+                Mathf.Abs(1 - Vector3.Dot(_orientHit.normal, UpForOrientation)) > Epsilon
+                )
             {
-                Debug.Log(_orientHit.normal);
+                upForMovement = _orientHit.normal;
+                OrientWithGravity(out upForOrientation, upForMovement);
             }
             _climbTimeoutDelta -= Time.deltaTime;
         }
@@ -288,16 +287,6 @@ namespace StarterAssets
             return tmp;
         }
         // CONTROL METHODS
-        private void ClimbCheck(in Vector3 upForOrientation)
-        {
-            float playerHeightY = _renderer.bounds.size.y;
-            float playerHeightZhalf = _renderer.bounds.size.z / 2;
-            ClimbRayIntersects = Physics.Raycast(
-                transform.position + upForOrientation * (playerHeightY - GroundedOffset) + transform.forward * (playerHeightZhalf - ClimbOffset),
-                transform.forward,
-                out _climbHit, 2.0f * ClimbOffset, GroundLayers
-            );
-        }
         private void GroundedCheck(in Vector3 upForOrientation)
         {
             Grounded = Physics.CheckSphere(
@@ -313,30 +302,38 @@ namespace StarterAssets
                 _animator.SetBool(_animIDGrounded, Grounded);
             }
         }
-        private void OrientCheck(in Vector3 upForOrientation)
-        {
-            OrientRayIntersects = Physics.SphereCast(
-                transform.position + upForOrientation * OrientOffset,
-                OrientRadius,
-                -upForOrientation,
-                out _orientHit,
-                2.0f * OrientOffset,
-                GroundLayers
-                );
-
-            // update animator if using character
-            if (_hasAnimator)
-            {
-                _animator.SetBool(_animIDGrounded, Grounded);
-            }
-        }
         private void SlopeCheck(in Vector3 upForOrientation)
         {
             SlopeRayIntersects = Physics.Raycast(
                 transform.position + upForOrientation * SlopeRayOffset,
                 -upForOrientation,
-                out _groundHit, 2.0f * SlopeRayOffset, GroundLayers
+                out _slopeHit,
+                SlopeRayLength,
+                GroundLayers
             );
+        }
+        private void ClimbCheck(in Vector3 upForOrientation)
+        {
+            float playerHeightY = _renderer.bounds.size.y;
+            float playerHeightZhalf = _renderer.bounds.size.z / 2;
+            ClimbRayIntersects = Physics.Raycast(
+                transform.position + upForOrientation * playerHeightY + transform.forward * (playerHeightZhalf - ClimbRayOffset),
+                transform.forward,
+                out _climbHit,
+                ClimbRayLength,
+                GroundLayers
+            );
+        }
+        private void OrientCheck(in Vector3 upForOrientation)
+        {
+            OrientRayIntersects = Physics.SphereCast(
+                transform.position + upForOrientation * OrientRayOffset,
+                OrientRadius,
+                -upForOrientation,
+                out _orientHit,
+                OrientRayLength,
+                GroundLayers
+                );
         }
         private void UpdateCameraPosition()
         {
@@ -533,16 +530,19 @@ namespace StarterAssets
                     _animator.SetBool(_animIDFreeFall, false);
                 }
 
-                Vector3 _gravityUp = orthogonalizeForwardReturnUp(Gravity, upForOrientation);
-                if (_gravityUp.normalized == -upForOrientation.normalized)
-                {
-                    _gravity = Gravity - _gravityUp;
-                }
+                // Vector3 _gravityUp = orthogonalizeForwardReturnUp(Gravity, upForOrientation);
+                // if (_gravityUp.normalized == -upForOrientation.normalized)
+                // {
+                //     _gravity = Vector3.zero;
+                //     // _gravity = Gravity - _gravityUp;
+                // }
                 Vector3 _verticalVelocityUp = orthogonalizeForwardReturnUp(_verticalVelocity, upForOrientation);
                 if (_verticalVelocityUp.normalized == -upForOrientation.normalized)
                 {
+                    // _verticalVelocity = Vector3.zero;
                     _verticalVelocity -= _verticalVelocityUp;
                 }
+                Debug.Log(_verticalVelocity);
                 // Jump
                 if (_input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
@@ -611,33 +611,59 @@ namespace StarterAssets
             }
             if (ShowSlopeCheck)
             {
-                if (SlopeRayIntersects) Gizmos.color = transparentGreen;
-                else Gizmos.color = transparentRed;
+                float distance;
+                if (SlopeRayIntersects)
+                {
+                    Gizmos.color = transparentGreen;
+                    distance = _slopeHit.distance;
+                }
+                else
+                {
+                    Gizmos.color = transparentRed;
+                    distance = SlopeRayLength;
+                }
 
-                float _sizeY2 = _renderer.bounds.size.y / 2;
                 from = transform.position + _upForOrientation * SlopeRayOffset;
-                to = transform.position - _upForOrientation * SlopeRayOffset;
+                to = transform.position - _upForOrientation * (distance - SlopeRayOffset);
+                Gizmos.DrawLine(from, to);
+            }
+            if (ShowClimbCheck)
+            {
+                float distance;
+                if (ClimbRayIntersects)
+                {
+                    Gizmos.color = transparentGreen;
+                    distance = _climbHit.distance;
+                }
+                else
+                {
+                    Gizmos.color = transparentRed;
+                    distance = ClimbRayLength;
+                }
+                float playerHeightY = _renderer.bounds.size.y;
+                float playerHeightZhalf = _renderer.bounds.size.z / 2;
+                from = transform.position + _upForOrientation * playerHeightY + transform.forward * (playerHeightZhalf - ClimbRayOffset);
+                to = transform.position + _upForOrientation * playerHeightY + transform.forward * (playerHeightZhalf - ClimbRayOffset + distance);
                 Gizmos.DrawLine(from, to);
             }
             if (ShowOrientCheck)
             {
-                if (OrientRayIntersects) Gizmos.color = transparentGreen;
-                else Gizmos.color = transparentRed;
+                float distance;
+                if (OrientRayIntersects)
+                {
+                    Gizmos.color = transparentGreen;
+                    distance = _orientHit.distance;
+                }
+                else
+                {
+                    Gizmos.color = transparentRed;
+                    distance = OrientRayLength;
+                }
 
-                from = transform.position + _upForOrientation * OrientOffset;
-                to = transform.position - _upForOrientation * OrientOffset;
+                from = transform.position + _upForOrientation * OrientRayOffset;
+                to = transform.position - _upForOrientation * (distance - OrientRayOffset);
                 Gizmos.DrawLine(from, to);
                 Gizmos.DrawSphere(to, OrientRadius);
-            }
-            if (ShowClimbCheck)
-            {
-                if (ClimbRayIntersects) Gizmos.color = transparentGreen;
-                else Gizmos.color = transparentRed;
-                float playerHeightY = _renderer.bounds.size.y;
-                float playerHeightZhalf = _renderer.bounds.size.z / 2;
-                from = transform.position + _upForOrientation * (playerHeightY - GroundedOffset) + transform.forward * (playerHeightZhalf - ClimbOffset);
-                to = transform.position + _upForOrientation * (playerHeightY - GroundedOffset) + transform.forward * (playerHeightZhalf + ClimbOffset);
-                Gizmos.DrawLine(from, to);
             }
         }
 
