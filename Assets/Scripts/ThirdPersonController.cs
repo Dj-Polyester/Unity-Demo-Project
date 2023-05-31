@@ -18,24 +18,19 @@ namespace StarterAssets
         [Header("Player")]
         [Tooltip("Mesh (Geometric interpretation) of the player to deduce info such as size")]
         public GameObject ArmatureMesh;
-
         [Tooltip("Move speed of the character in m/s")]
         public float MoveSpeed = 2.0f;
-
-        [Tooltip("Sprint speed of the character in m/s")]
-        public float SprintMultiplier = 5.335f;
-
+        [Tooltip("Sprint speed of the character in m/s when standing")]
+        public float MoveSprintMultiplier = 5.335f;
         [Tooltip("How fast the character turns to face movement direction")]
         [Range(0.0f, 0.3f)]
         public float RotationSmoothTime = 0.12f;
-
         [Tooltip("Acceleration and deceleration")]
         public float SpeedChangeRate = 10.0f;
         [Tooltip("Up vector used for orientation. Up vector for movement is calculated using the ground normal")]
         public Vector3 UpForOrientation = Vector3.up;
         [Tooltip("Forward vector used for orientation.")]
         public Vector3 ForwardForOrientation = Vector3.forward;
-
         public AudioClip LandingAudioClip;
         public AudioClip[] FootstepAudioClips;
         [Range(0, 1)] public float FootstepAudioVolume = 0.5f;
@@ -52,8 +47,6 @@ namespace StarterAssets
         public float JumpTimeout = 0.50f;
         [Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
         public float FallTimeout = 0.15f;
-        [Tooltip("Time required to pass before being able to climb again.")]
-        public float ClimbTimeout = 0.15f;
 
         [Header("Rigidbody Control and Gizmo Variables")]
         [Tooltip("Whether to show grounded check sphere gizmo")]
@@ -86,6 +79,12 @@ namespace StarterAssets
         public LayerMask GroundLayers;
 
         [Header("Climb")]
+        [Tooltip("Climb speed of the character in m/s")]
+        public float ClimbSpeed = 2.0f;
+        [Tooltip("Sprint speed of the character in m/s when climbing")]
+        public float ClimbSprintMultiplier = 2f;
+        [Tooltip("Time required to pass before being able to climb again.")]
+        public float ClimbTimeout = 0.15f;
         [Tooltip("Upward offset from which the climb ray is fired from")]
         public float ClimbRayOffset = 0.1f;
         [Tooltip("Length of the climb ray")]
@@ -96,20 +95,26 @@ namespace StarterAssets
         public float OrientRayLength = 0.5f;
         [Tooltip("The radius of the orient check. Should be more than the radius of the CapsuleCollider")]
         public float OrientRadius = 0.2f;
+        [Tooltip("Rate of change of up for orientation change")]
+        public float SecondsToCompleteUpForOrientationAngleChange = 5.0f;
+        [Tooltip("Whether the player should move on input")]
+        public bool CanMove = true;
+        [Tooltip("Whether the player should jump on input")]
+        public bool CanJump = true;
+        [Tooltip("Whether the player is climbing")]
+        public bool Climbing = false;
+        [Tooltip("Whether the player is crouching while climbing")]
+        public bool CrouchWhileClimbing = false;
 
         [Header("Cinemachine")]
         [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
         public GameObject CinemachineCameraTarget;
-
         [Tooltip("How far in degrees can you move the camera up")]
         public float TopClamp = 70.0f;
-
         [Tooltip("How far in degrees can you move the camera down")]
         public float BottomClamp = -30.0f;
-
         [Tooltip("Additional degress to override the camera. Useful for fine tuning camera position when locked")]
         public float CameraAngleOverride = 0.0f;
-
         [Tooltip("For locking the camera position on all axis")]
         public bool LockCameraPosition = false;
 
@@ -129,6 +134,9 @@ namespace StarterAssets
         float _targetRotation = 0.0f;
         private float _rotationVelocity;
         private Vector3 _upForOrientation;
+        private Vector3 _upForOrientationTarget;
+        private float _upForOrientationAngleChangePerTick;
+        private Vector3 _axis2rotateUpForOrientationAround;
         private Vector3 _upForMovement;
         private Vector3 _refVectorOnVWPlane = Vector3.zero;
         // collision detection
@@ -146,6 +154,7 @@ namespace StarterAssets
         private int _animIDJump;
         private int _animIDFreeFall;
         private int _animIDMotionSpeed;
+        private int _animIDClimb;
 
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
         private PlayerInput _playerInput;
@@ -225,7 +234,20 @@ namespace StarterAssets
         private void FixedUpdate()
         {
             setVerticalVelocity(_upForOrientation);
-            setHorizontalVelocity(_upForOrientation, _upForMovement);
+            if (CanMove)
+            {
+                setHorizontalVelocity(_upForOrientation, _upForMovement);
+            }
+            else if (1 - Vector3.Dot(_upForOrientation, _upForOrientationTarget) < Epsilon)
+            {
+                CanMove = true;
+            }
+            else
+            {
+                _upForOrientation = Quaternion.AngleAxis(_upForOrientationAngleChangePerTick, _axis2rotateUpForOrientationAround) * _upForOrientation;
+                Debug.Log(string.Format("{0} {1}", _upForOrientationTarget, Vector3.Dot(_upForOrientation, _upForOrientationTarget)));
+                OrientWithGravity(_upForOrientation);
+            }
             Move();
         }
 
@@ -240,11 +262,35 @@ namespace StarterAssets
             upForOrientation :
             _slopeHit.normal;
 
-            if (ClimbRayIntersects && _climbTimeoutDelta <= 0.0f)
+            if (CanMove && ClimbRayIntersects && _climbTimeoutDelta <= 0.0f)
             {
+                CanMove = false;
                 upForMovement = vectorCleaned(_climbHit.normal);
                 zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
-                OrientWithGravity(out upForOrientation, upForMovement);
+                _upForOrientationTarget = upForMovement;
+                if (CrouchWhileClimbing && _hasAnimator)
+                {
+                    if (Mathf.Abs(1 - Vector3.Dot(_upForOrientationTarget, Vector3.up)) < Epsilon)
+                    {
+                        Climbing = false;
+                        _animator.SetBool(_animIDClimb, Climbing);
+                        CanJump = true;
+                    }
+                    else
+                    {
+                        Climbing = true;
+                        _animator.SetBool(_animIDClimb, Climbing);
+                        _animator.Play("Climb", -1, 0f);
+                        CanJump = false;
+                    }
+                }
+                _axis2rotateUpForOrientationAround = Vector3.Cross(upForOrientation, _upForOrientationTarget).normalized;
+                (float totalOrientAngle, Vector3 _) = getAngleBetweenTwoVectors(
+                   upForOrientation,
+                   _upForOrientationTarget,
+                   _axis2rotateUpForOrientationAround
+                   );
+                _upForOrientationAngleChangePerTick = (totalOrientAngle * Time.deltaTime) / SecondsToCompleteUpForOrientationAngleChange;
                 _climbTimeoutDelta = ClimbTimeout;
             }
             else if (
@@ -255,7 +301,8 @@ namespace StarterAssets
             {
                 upForMovement = _orientHit.normal;
                 zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
-                OrientWithGravity(out upForOrientation, upForMovement);
+                upForOrientation = upForMovement;
+                OrientWithGravity(upForOrientation);
             }
             _climbTimeoutDelta -= Time.deltaTime;
         }
@@ -263,9 +310,8 @@ namespace StarterAssets
         {
             transform.LookAt(transform.position + forward, up);
         }
-        private void OrientWithGravity(out Vector3 upForOrientation, in Vector3 up)
+        private void OrientWithGravity(in Vector3 upForOrientation)
         {
-            upForOrientation = up;
             Vector3 newForward = Vector3.Cross(transform.right, upForOrientation);
             Gravity = -Gravity.magnitude * upForOrientation;
             Orient(newForward, upForOrientation);
@@ -350,6 +396,7 @@ namespace StarterAssets
             _animIDJump = Animator.StringToHash("Jump");
             _animIDFreeFall = Animator.StringToHash("FreeFall");
             _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
+            _animIDClimb = Animator.StringToHash("Climb");
         }
 
         Vector3 orthogonalizeForwardReturnUp(in Vector3 forward, in Vector3 up)
@@ -452,12 +499,12 @@ namespace StarterAssets
                     _mainCameraForward = Vector3.Cross(upForOrientation, transform.right).normalized;
                 }
 
-                (float _mainCameraY, Vector3 _mainCameraUp) = getAngleBetweenTwoVectors(
+                (float _mainCameraY, Vector3 _) = getAngleBetweenTwoVectors(
                     _refVectorOnVWPlane,
                     _mainCameraForward,
                     upForOrientation
                     );
-                (float _transformY, Vector3 _transformUp) = getAngleBetweenTwoVectors(
+                (float _transformY, Vector3 _) = getAngleBetweenTwoVectors(
                     _refVectorOnVWPlane,
                     transform.forward,
                     upForOrientation
@@ -476,8 +523,18 @@ namespace StarterAssets
             float _horizontalSpeed;
             float inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
             // set target speed based on move speed, sprint speed and if sprint is pressed
-            float targetSpeed = MoveSpeed;
-            if (_input.sprint) targetSpeed *= SprintMultiplier;
+            float targetSpeed, sprintMultiplier;
+            if (Climbing)
+            {
+                targetSpeed = ClimbSpeed;
+                sprintMultiplier = ClimbSprintMultiplier;
+            }
+            else
+            {
+                targetSpeed = MoveSpeed;
+                sprintMultiplier = MoveSprintMultiplier;
+            }
+            if (_input.sprint) targetSpeed *= sprintMultiplier;
 
             // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
 
@@ -534,7 +591,7 @@ namespace StarterAssets
                 zeroOutOrientationDirection(ref _gravity, Gravity, upForOrientation);
                 zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
                 // Jump
-                if (_input.jump && _jumpTimeoutDelta <= 0.0f)
+                if (CanJump && _input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
                     // the square root of 2 * G * H = how much velocity needed to reach desired height
                     _verticalVelocity = Mathf.Sqrt(2f * Gravity.magnitude * JumpHeight) * upForOrientation;
@@ -549,6 +606,10 @@ namespace StarterAssets
                 if (_jumpTimeoutDelta >= 0.0f)
                 {
                     _jumpTimeoutDelta -= Time.deltaTime;
+                }
+                if (!CanJump)
+                {
+                    _input.jump = false;
                 }
             }
             else
