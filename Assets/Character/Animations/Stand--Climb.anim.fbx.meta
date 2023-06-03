@@ -1,20 +1,32 @@
 fileFormatVersion: 2
-guid: 98f277b0c8055e143b2fcf058d3c27dc
+guid: ca80794d4019c721b943c4df8c863061
 ModelImporter:
   serializedVersion: 21300
   internalIDToNameTable:
   - first:
-      74: 7478122292733868173
-    second: JumpStart
+      74: -3100369314251171874
+    second: Idle
   - first:
-      74: -2702400367771620057
-    second: InAir
+      74: -107549751874687134
+    second: Skeleton|SkeletonAction
   - first:
-      74: -9098803823909532060
-    second: JumpLand
+      74: -8492688214919892806
+    second: Skeleton|SkeletonAction.001
+  - first:
+      74: -6438358637678053245
+    second: Skeleton|SkeletonAction.002
+  - first:
+      74: -6372436644740821045
+    second: Skeleton|Skeleton|Idle|BaseLayer
+  - first:
+      74: -7704261157342397370
+    second: Skeleton|Skeleton.001|Idle|BaseLayer
+  - first:
+      74: -3117974748976248377
+    second: Skeleton|Skeleton.001|Skeleton|SkeletonAction.002
   externalObjects: {}
   materials:
-    materialImportMode: 1
+    materialImportMode: 2
     materialName: 0
     materialSearch: 1
     materialLocation: 1
@@ -23,9 +35,11 @@ ModelImporter:
     bakeSimulation: 0
     resampleCurves: 1
     optimizeGameObjects: 0
-    removeConstantScaleCurves: 0
+    removeConstantScaleCurves: 1
     motionNodeName: 
-    rigImportErrors: 
+    rigImportErrors: "Copied Avatar Rig Configuration mis-match. Transform hierarchy
+      does not match:\n\tParent for 'Hips' differs from one found in HumanDescription.
+      'Stand--Climb.anim' was found instead of 'Skeleton'.\n"
     rigImportWarnings: 
     animationImportErrors: 
     animationImportWarnings: 
@@ -33,79 +47,14 @@ ModelImporter:
     animationDoRetargetingWarnings: 0
     importAnimatedCustomProperties: 0
     importConstraints: 0
-    animationCompression: 1
-    animationRotationError: 0.05
-    animationPositionError: 0.05
-    animationScaleError: 0.25
+    animationCompression: 3
+    animationRotationError: 0.5
+    animationPositionError: 0.5
+    animationScaleError: 0.5
     animationWrapMode: 0
     extraExposedTransformPaths: []
     extraUserProperties: []
-    clipAnimations:
-    - serializedVersion: 16
-      name: JumpStart
-      takeName: JumpStart
-      internalID: 0
-      firstFrame: 28
-      lastFrame: 40
-      wrapMode: 0
-      orientationOffsetY: 0
-      level: 0.2
-      cycleOffset: 0
-      loop: 0
-      hasAdditiveReferencePose: 0
-      loopTime: 0
-      loopBlend: 0
-      loopBlendOrientation: 1
-      loopBlendPositionY: 1
-      loopBlendPositionXZ: 1
-      keepOriginalOrientation: 1
-      keepOriginalPositionY: 1
-      keepOriginalPositionXZ: 1
-      heightFromFeet: 0
-      mirror: 0
-      bodyMask: 01000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000
-      curves: []
-      events: []
-      transformMask: []
-      maskType: 3
-      maskSource: {instanceID: 0}
-      additiveReferencePoseFrame: 20
-    - serializedVersion: 16
-      name: JumpLand
-      takeName: JumpStart
-      internalID: 0
-      firstFrame: 55
-      lastFrame: 74
-      wrapMode: 0
-      orientationOffsetY: 0
-      level: 0
-      cycleOffset: 0
-      loop: 0
-      hasAdditiveReferencePose: 0
-      loopTime: 0
-      loopBlend: 0
-      loopBlendOrientation: 1
-      loopBlendPositionY: 1
-      loopBlendPositionXZ: 1
-      keepOriginalOrientation: 1
-      keepOriginalPositionY: 1
-      keepOriginalPositionXZ: 1
-      heightFromFeet: 0
-      mirror: 0
-      bodyMask: 01000000010000000100000001000000010000000100000001000000010000000100000001000000010000000100000001000000
-      curves: []
-      events:
-      - time: 0.1615599
-        functionName: OnLand
-        data: 
-        objectReferenceParameter: {instanceID: 0}
-        floatParameter: 0
-        intParameter: 0
-        messageOptions: 0
-      transformMask: []
-      maskType: 3
-      maskSource: {instanceID: 0}
-      additiveReferencePoseFrame: 20
+    clipAnimations: []
     isReadable: 0
   meshes:
     lODScreenPercentages: []
@@ -118,7 +67,7 @@ ModelImporter:
     importBlendShapes: 1
     importCameras: 1
     importLights: 1
-    nodeNameCollisionStrategy: 0
+    nodeNameCollisionStrategy: 1
     fileIdsGeneration: 2
     swapUVChannels: 0
     generateSecondaryUV: 0
@@ -957,8 +906,8 @@ ModelImporter:
   animationType: 3
   humanoidOversampling: 1
   avatarSetup: 2
-  addHumanoidExtraRootOnlyWhenUsingAvatar: 0
-  remapMaterialsIfMaterialImportModeIsNone: 1
+  addHumanoidExtraRootOnlyWhenUsingAvatar: 1
+  remapMaterialsIfMaterialImportModeIsNone: 0
   additionalBone: 0
   userData: 
   assetBundleName: 

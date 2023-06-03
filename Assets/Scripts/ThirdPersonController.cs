@@ -65,8 +65,7 @@ namespace StarterAssets
         public bool ClimbRayIntersects = true;
         [Tooltip("Downward ray used for orient check.")]
         public bool OrientRayIntersects = true;
-
-        [Tooltip("Useful for rough ground (positive)")]
+        [Tooltip("Useful for rough ground")]
         public float GroundedOffset = 0.1f;
         [Tooltip("The radius of the grounded check. Should match the radius of the CapsuleCollider")]
         public float GroundedRadius = 0.16f;
@@ -74,11 +73,10 @@ namespace StarterAssets
         public float SlopeRayOffset = 0.1f;
         [Tooltip("Length of the slope ray. Should be more than jump height")]
         public float SlopeRayLength = 1f;
-
         [Tooltip("What layers the character uses as ground")]
         public LayerMask GroundLayers;
 
-        [Header("Climb")]
+        [Header("Climbing")]
         [Tooltip("Climb speed of the character in m/s")]
         public float ClimbSpeed = 2.0f;
         [Tooltip("Sprint speed of the character in m/s when climbing")]
@@ -89,12 +87,6 @@ namespace StarterAssets
         public float ClimbRayOffset = 0.1f;
         [Tooltip("Length of the climb ray")]
         public float ClimbRayLength = 1f;
-        [Tooltip("Upward offset from which the orient ray is fired from")]
-        public float OrientRayOffset = 0.5f;
-        [Tooltip("Length of the orient ray")]
-        public float OrientRayLength = 0.5f;
-        [Tooltip("The radius of the orient check. Should be more than the radius of the CapsuleCollider")]
-        public float OrientRadius = 0.2f;
         [Tooltip("Rate of change of up for orientation change")]
         public float SecondsToCompleteUpForOrientationAngleChange = 5.0f;
         [Tooltip("Whether the player should move on input")]
@@ -103,8 +95,16 @@ namespace StarterAssets
         public bool CanJump = true;
         [Tooltip("Whether the player is climbing")]
         public bool Climbing = false;
-        [Tooltip("Whether the player is crouching while climbing")]
-        public bool CrouchWhileClimbing = false;
+
+        [Header("Orienting (aka Climbing on convex surfaces)")]
+        [Tooltip("Upward offset from which the orient ray is fired from")]
+        public float OrientRayOffset = 0.5f;
+        [Tooltip("Length of the orient ray")]
+        public float OrientRayLength = 0.5f;
+        [Tooltip("The radius of the orient check. Should be more than the radius of the CapsuleCollider")]
+        public float OrientRadius = 0.2f;
+        [Tooltip("Whether the player is orienting")]
+        public bool Orienting = false;
 
         [Header("Cinemachine")]
         [Tooltip("The follow target set in the Cinemachine Virtual Camera that the camera will follow")]
@@ -134,10 +134,11 @@ namespace StarterAssets
         float _targetRotation = 0.0f;
         private float _rotationVelocity;
         private Vector3 _upForOrientation;
+        private Vector3 _upForOrientationCamera;
         private Vector3 _upForOrientationTarget;
         private float _upForOrientationAngleChangePerTick;
         private Vector3 _axis2rotateUpForOrientationAround;
-        private Vector3 _upForMovement;
+        private Vector3 _upForMovement = Vector3.zero;
         private Vector3 _refVectorOnVWPlane = Vector3.zero;
         // collision detection
         RaycastHit _slopeHit;
@@ -212,21 +213,22 @@ namespace StarterAssets
             _jumpTimeoutDelta = JumpTimeout;
             _fallTimeoutDelta = FallTimeout;
 
-            Orient(ForwardForOrientation, UpForOrientation);
+
+            _upForOrientation = UpForOrientation;
+            _upForOrientationCamera = _upForOrientation;
+            Orient(ForwardForOrientation, _upForOrientation);
         }
 
         private void Update()
         {
             _hasAnimator = TryGetComponent(out _animator);
 
-            _upForOrientation = transform.up;
-
             GroundedCheck(_upForOrientation);
             SlopeCheck(_upForOrientation);
             ClimbCheck(_upForOrientation);
             OrientCheck(_upForOrientation);
 
-            SetUpForMovement(ref _upForOrientation, out _upForMovement);
+            SetUpForMovement(ref _upForOrientation, ref _upForMovement, _upForOrientationCamera);
             UpdateCameraPosition();
         }
 
@@ -238,83 +240,108 @@ namespace StarterAssets
             {
                 setHorizontalVelocity(_upForOrientation, _upForMovement);
             }
-            else if (1 - Vector3.Dot(_upForOrientation, _upForOrientationTarget) < Epsilon)
+            else if (1 - Vector3.Dot(_upForOrientationCamera, _upForOrientationTarget) < Epsilon)
             {
+                Climbing = false;
                 CanMove = true;
+                zeroOutVelocity();
+                _upForOrientation = _upForOrientationCamera;
+                OrientWithGravity(_upForOrientation);
+                if (_hasAnimator)
+                {
+                    _animator.SetBool(_animIDClimb, Climbing);
+                }
             }
             else
             {
-                _upForOrientation = Quaternion.AngleAxis(_upForOrientationAngleChangePerTick, _axis2rotateUpForOrientationAround) * _upForOrientation;
-                Debug.Log(string.Format("{0} {1}", _upForOrientationTarget, Vector3.Dot(_upForOrientation, _upForOrientationTarget)));
-                OrientWithGravity(_upForOrientation);
+                _upForOrientationCamera =
+                Quaternion.AngleAxis(_upForOrientationAngleChangePerTick, _axis2rotateUpForOrientationAround) * _upForOrientationCamera;
+                OrientCamera(_upForOrientationCamera);
             }
+            // if (Orienting)
+            // {
+            //     if (OrientRayIntersects && Mathf.Abs(1 - Vector3.Dot(_orientHit.normal, UpForOrientation)) > Epsilon)
+            //     {
+            //         _upForMovement = _orientHit.normal;
+            //         _upForOrientation = _upForMovement;
+            //         OrientWithGravity(_upForOrientation);
+            //     }
+            //     else
+            //     {
+            //         _upForMovement = _orientHit.normal;
+            //         _upForOrientation = _upForMovement;
+            //         OrientWithGravity(_upForOrientation);
+            //         zeroOutVelocity();
+            //         Orienting = false;
+            //     }
+            // }
             Move();
         }
 
         private void LateUpdate()
         {
-            CameraRotation(_upForOrientation);
+            CameraRotation(_upForOrientationCamera);
         }
-        private void SetUpForMovement(ref Vector3 upForOrientation, out Vector3 upForMovement)
+        private void SetUpForMovement(ref Vector3 upForOrientation, ref Vector3 upForMovement, in Vector3 upForOrientationCamera)
         {
-            upForMovement =
-            (_slopeHit.normal == Vector3.zero) ?
-            upForOrientation :
-            _slopeHit.normal;
-
-            if (CanMove && ClimbRayIntersects && _climbTimeoutDelta <= 0.0f)
+            if (!Climbing && ClimbRayIntersects && _climbTimeoutDelta <= 0.0f)
             {
+                Climbing = true;
                 CanMove = false;
                 upForMovement = vectorCleaned(_climbHit.normal);
-                zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
+
                 _upForOrientationTarget = upForMovement;
-                if (CrouchWhileClimbing && _hasAnimator)
+                if (_hasAnimator)
                 {
-                    if (Mathf.Abs(1 - Vector3.Dot(_upForOrientationTarget, Vector3.up)) < Epsilon)
-                    {
-                        Climbing = false;
-                        _animator.SetBool(_animIDClimb, Climbing);
-                        CanJump = true;
-                    }
-                    else
-                    {
-                        Climbing = true;
-                        _animator.SetBool(_animIDClimb, Climbing);
-                        _animator.Play("Climb", -1, 0f);
-                        CanJump = false;
-                    }
+                    _animator.SetBool(_animIDClimb, Climbing);
                 }
-                _axis2rotateUpForOrientationAround = Vector3.Cross(upForOrientation, _upForOrientationTarget).normalized;
+                _axis2rotateUpForOrientationAround = Vector3.Cross(upForOrientationCamera, _upForOrientationTarget).normalized;
                 (float totalOrientAngle, Vector3 _) = getAngleBetweenTwoVectors(
-                   upForOrientation,
+                   upForOrientationCamera,
                    _upForOrientationTarget,
                    _axis2rotateUpForOrientationAround
                    );
                 _upForOrientationAngleChangePerTick = (totalOrientAngle * Time.deltaTime) / SecondsToCompleteUpForOrientationAngleChange;
                 _climbTimeoutDelta = ClimbTimeout;
             }
-            else if (
-                !SlopeRayIntersects &&
-                OrientRayIntersects &&
-                Mathf.Abs(1 - Vector3.Dot(_orientHit.normal, UpForOrientation)) > Epsilon
-                )
+            if (SlopeRayIntersects)
             {
-                upForMovement = _orientHit.normal;
-                zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
-                upForOrientation = upForMovement;
-                OrientWithGravity(upForOrientation);
+                upForMovement = _slopeHit.normal;
             }
+            else if (!Orienting && OrientRayIntersects && Mathf.Abs(1 - Vector3.Dot(_orientHit.normal, UpForOrientation)) > Epsilon)
+            {
+                // Debug.Log("wtf");
+                Orienting = true;
+                upForMovement = _orientHit.normal;
+            }
+            else if (upForMovement == Vector3.zero)
+            {
+                upForMovement = upForOrientation;
+            }
+            Debug.Log(string.Format("{0} {1}", _orientHit.normal, UpForOrientation));
             _climbTimeoutDelta -= Time.deltaTime;
         }
-        private void Orient(Vector3 forward, Vector3 up)
+        private void Orient(Vector3 forward, Vector3 up, bool view = false)
         {
-            transform.LookAt(transform.position + forward, up);
+            if (view)
+            {
+                _mainCamera.transform.LookAt(transform.position + forward, up);
+            }
+            else
+            {
+                transform.LookAt(transform.position + forward, up);
+            }
         }
         private void OrientWithGravity(in Vector3 upForOrientation)
         {
             Vector3 newForward = Vector3.Cross(transform.right, upForOrientation);
             Gravity = -Gravity.magnitude * upForOrientation;
             Orient(newForward, upForOrientation);
+        }
+        private void OrientCamera(in Vector3 upForOrientation)
+        {
+            Vector3 newForward = Vector3.Cross(transform.right, upForOrientation);
+            Orient(newForward, upForOrientation, true);
         }
         //Zeroes out coordinates below a threshold
         private Vector3 vectorCleaned(in Vector3 vector)
@@ -523,18 +550,8 @@ namespace StarterAssets
             float _horizontalSpeed;
             float inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
             // set target speed based on move speed, sprint speed and if sprint is pressed
-            float targetSpeed, sprintMultiplier;
-            if (Climbing)
-            {
-                targetSpeed = ClimbSpeed;
-                sprintMultiplier = ClimbSprintMultiplier;
-            }
-            else
-            {
-                targetSpeed = MoveSpeed;
-                sprintMultiplier = MoveSprintMultiplier;
-            }
-            if (_input.sprint) targetSpeed *= sprintMultiplier;
+            float targetSpeed = MoveSpeed;
+            if (_input.sprint) targetSpeed *= MoveSprintMultiplier;
 
             // a simplistic acceleration and deceleration designed to be easy to remove, replace, or iterate upon
 
@@ -588,8 +605,8 @@ namespace StarterAssets
                     _animator.SetBool(_animIDJump, false);
                     _animator.SetBool(_animIDFreeFall, false);
                 }
-                zeroOutOrientationDirection(ref _gravity, Gravity, upForOrientation);
-                zeroOutOrientationDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
+                zeroOutVectorInDirection(ref _gravity, ZeroOutVerticalVelocityDirection.OnlyNegativeReference, Gravity, upForOrientation);
+                zeroOutVectorInDirection(ref _verticalVelocity, ZeroOutVerticalVelocityDirection.OnlyNegativeReference, _verticalVelocity, upForOrientation);
                 // Jump
                 if (CanJump && _input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
@@ -622,13 +639,9 @@ namespace StarterAssets
                 {
                     _fallTimeoutDelta -= Time.deltaTime;
                 }
-                else
+                else if (!Climbing && _hasAnimator)
                 {
-                    // update animator if using character
-                    if (_hasAnimator)
-                    {
-                        _animator.SetBool(_animIDFreeFall, true);
-                    }
+                    _animator.SetBool(_animIDFreeFall, true);
                 }
 
                 _gravity = Gravity;
@@ -638,17 +651,49 @@ namespace StarterAssets
 
             _verticalVelocity += _gravity * Time.deltaTime;
         }
-
-        private void zeroOutOrientationDirection(
+        enum ZeroOutVerticalVelocityDirection
+        {
+            OnlyNegativeReference,
+            NegativeAndPositiveReference,
+            AllDirections,
+        }
+        private void zeroOutVelocity()
+        {
+            zeroOutVectorInDirection(ref _horizontalVelocity);
+            zeroOutVectorInDirection(ref _verticalVelocity);
+        }
+        private void zeroOutVectorInDirection(
             ref Vector3 vector,
-            in Vector3 value2subtractFrom,
-            in Vector3 upForOrientation
+            in ZeroOutVerticalVelocityDirection direction = ZeroOutVerticalVelocityDirection.AllDirections,
+            in Vector3? value2subtractFrom = null,
+            in Vector3? directionReference = null
             )
         {
-            Vector3 _vectorUp = orthogonalizeForwardReturnUp(value2subtractFrom, upForOrientation);
-            if (_vectorUp.normalized == -upForOrientation.normalized)
+            switch (direction)
             {
-                vector = value2subtractFrom - _vectorUp;
+                case ZeroOutVerticalVelocityDirection.AllDirections:
+                    vector = Vector3.zero;
+                    break;
+                default:
+                    Vector3 _value2subtractFrom = value2subtractFrom ?? Vector3.zero;
+                    Vector3 _directionReference = directionReference ?? Vector3.zero;
+
+                    Vector3 _vectorUp = orthogonalizeForwardReturnUp(_value2subtractFrom, _directionReference);
+                    float cosThetaBetween = Vector3.Dot(_vectorUp.normalized, _directionReference);
+                    if (
+                        (
+                            direction == ZeroOutVerticalVelocityDirection.OnlyNegativeReference &&
+                            Mathf.Abs(cosThetaBetween) > -1 - Epsilon && cosThetaBetween < -1 + Epsilon
+                        ) ||
+                        (
+                            direction == ZeroOutVerticalVelocityDirection.NegativeAndPositiveReference &&
+                            Mathf.Abs(cosThetaBetween) > 1 - Epsilon && Mathf.Abs(cosThetaBetween) < 1 + Epsilon
+                        )
+                    )
+                    {
+                        vector = _value2subtractFrom - _vectorUp;
+                    }
+                    break;
             }
         }
 
