@@ -41,6 +41,7 @@ namespace StarterAssets
         public float RotationSmoothTime = 0.12f;
         [Tooltip("Acceleration and deceleration")]
         public float SpeedChangeRate = 10.0f;
+
         [Header("Jumping")]
         [Tooltip("Whether the player should jump on input")]
         public bool CanJump = true;
@@ -133,13 +134,10 @@ namespace StarterAssets
         [Header("Animation")]
         [Tooltip("Time in seconds between two consecutive idle states")]
         public float SecondsBetweenIdleStates = 3f;
-        [Tooltip("The idle state currently the animator is playing when no movement is detected")]
-        public int CurrentIdleState = 0;
-        [Tooltip("The idle state currently the animator is playing when no movement is detected")]
-        [Range(1, 3)]
-        public int MaxIdleStates = 3;
+        [Tooltip("Duration time of each idle state in seconds")]
+        public float[] SecondsInTheIdleStates = { 30f, 3f, 1f };
         [Tooltip("Power in the math expression used for blending between idle states. Linear if 1, quadratic if 2 ,cubic if 3 and so on")]
-        public uint IdleStateChangeRatePower = 1;
+        public uint IdleStateChangeRatePower = 10;
         ///GENERIC
         private bool _hasAnimator;
         private bool IsCurrentDeviceMouse
@@ -153,7 +151,8 @@ namespace StarterAssets
 #endif
             }
         }
-        private int _nextIdleState;
+        private uint _currentIdleState = 0;
+        private uint _nextIdleState = 1;
         ///CAMERA
         private float _cinemachineTargetYaw;
         private float _cinemachineTargetPitch;
@@ -161,17 +160,18 @@ namespace StarterAssets
         private Vector3 _verticalVelocity;
         private Vector3 _horizontalVelocity;
         private Vector3 _gravity;
-        private float _lastHorizontalSpeedBeforeJump = 0;
-        private float _animationBlend;
-        private float _targetRotation = 0.0f;
-        private float _rotationVelocity;
-        private float _upForOrientationAngleChangePerTick;
         private Vector3 _upForOrientation;
         private Vector3 _upForMovement;
         private Vector3 _upForOrientationCamera;
         private Vector3 _upForOrientationTarget;
         private Vector3 _axis2rotateUpForOrientationAround;
         private Vector3 _refVectorOnVWPlane;
+        private Vector2 _oldInputMove = Vector2.zero;
+        private float _lastHorizontalSpeedBeforeJump = 0;
+        private float _animationBlend;
+        private float _targetRotation = 0.0f;
+        private float _rotationVelocity;
+        private float _upForOrientationAngleChangePerTick;
         //RAYCASTS
         private RaycastHit _slopeHit;
         private RaycastHit _climbHit;
@@ -180,7 +180,8 @@ namespace StarterAssets
         private float _jumpTimeoutDelta;
         private float _fallTimeoutDelta;
         private float _climbTimeoutDelta;
-        private float _idleTimeoutDelta;
+        private float _betweenIdleStatesTimeoutDelta;
+        private float _inAnIdleStateTimeoutDelta;
         ///COMPONENTS
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
         private PlayerInput _playerInput;
@@ -231,8 +232,7 @@ namespace StarterAssets
             _jumpTimeoutDelta = JumpTimeout;
             _fallTimeoutDelta = FallTimeout;
             _climbTimeoutDelta = ClimbTimeout;
-            _idleTimeoutDelta = SecondsBetweenIdleStates;
-            _nextIdleState = CurrentIdleState;
+            InitIdleAnimation();
 
             _upForOrientation = UpForOrientation;
             _upForOrientationCamera = _upForOrientation;
@@ -293,6 +293,13 @@ namespace StarterAssets
             _animIDClimb = Animator.StringToHash("Climb");
             _animIDIdleState = Animator.StringToHash("IdleState");
         }
+        private void InitIdleAnimation(uint currentIdleState = 0)
+        {
+            _currentIdleState = currentIdleState;
+            _nextIdleState = (_currentIdleState == 0) ? 1 : (_currentIdleState % ((uint)SecondsInTheIdleStates.Length - 1)) + 1;
+            _betweenIdleStatesTimeoutDelta = SecondsBetweenIdleStates;
+            _inAnIdleStateTimeoutDelta = SecondsInTheIdleStates[_currentIdleState];
+        }
         ///GENERIC
         private void Orient(Vector3 forward, Vector3 up, bool view = false)
         {
@@ -311,15 +318,15 @@ namespace StarterAssets
             Gravity = -Gravity.magnitude * upForOrientation;
             Orient(newForward, upForOrientation);
         }
-        Vector3 orthogonalizeForwardReturnUp(in Vector3 forward, in Vector3 up)
+        private Vector3 orthogonalizeForwardReturnUp(in Vector3 forward, in Vector3 up)
         {
             return Vector3.Dot(forward, up) * up;
         }
-        Vector3 orthogonalizeForwardReturnForward(in Vector3 forward, in Vector3 up)
+        private Vector3 orthogonalizeForwardReturnForward(in Vector3 forward, in Vector3 up)
         {
             return forward - orthogonalizeForwardReturnUp(forward, up);
         }
-        Vector3 getAnOrthogonalVectorFromVector(in Vector3 vector)
+        private Vector3 getAnOrthogonalVectorFromVector(in Vector3 vector)
         {
             if (Mathf.Abs(vector.x) < Epsilon && Mathf.Abs(vector.z) < Epsilon)
             {
@@ -415,7 +422,7 @@ namespace StarterAssets
             }
         }
         ///BASIC MOVEMENT
-        Vector3 getHorizontalDirection(in Vector3 upForOrientation, in Vector3 upForMovement)
+        private Vector3 getHorizontalDirection(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
             _refVectorOnVWPlane = getAnOrthogonalVectorFromVector(upForOrientation);
 
@@ -448,7 +455,7 @@ namespace StarterAssets
             }
             return Vector3.Cross(transform.right, upForMovement).normalized;
         }
-        void SetHorizontalVelocity(in Vector3 upForOrientation, in Vector3 upForMovement)
+        private void SetHorizontalVelocity(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
             float _horizontalSpeed;
             float targetSpeed = MoveSpeed;
@@ -465,24 +472,7 @@ namespace StarterAssets
                 if (_input.move == Vector2.zero)
                 {
                     targetSpeed = 0.0f;
-
-                    if (_nextIdleState == CurrentIdleState)
-                    {
-                        _nextIdleState = (CurrentIdleState + 1) % MaxIdleStates;
-                    }
-
-                    float _idleBlendExpPowered = Mathf.Pow(_idleTimeoutDelta / SecondsBetweenIdleStates, IdleStateChangeRatePower);
-                    float currentIdleStateReal = _idleBlendExpPowered * CurrentIdleState + (1 - _idleBlendExpPowered) * _nextIdleState;
-                    if (_hasAnimator)
-                    {
-                        _animator.SetFloat(_animIDIdleState, currentIdleStateReal);
-                    }
-                    if (_idleTimeoutDelta <= 0.0f)
-                    {
-                        _idleTimeoutDelta = SecondsBetweenIdleStates;
-                        CurrentIdleState = _nextIdleState;
-                    }
-                    _idleTimeoutDelta -= Time.deltaTime;
+                    SwitchIdleAnimation();
                 }
 
                 // a reference to the players current horizontal velocity
@@ -521,8 +511,9 @@ namespace StarterAssets
 
             Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
             _horizontalVelocity = targetDirection * _horizontalSpeed;
+            _oldInputMove = _input.move;
         }
-        void SetVerticalVelocity(in Vector3 upForOrientation)
+        private void SetVerticalVelocity(in Vector3 upForOrientation)
         {
             if (Grounded)
             {
@@ -831,6 +822,33 @@ namespace StarterAssets
             {
                 AudioSource.PlayClipAtPoint(LandingAudioClip, transform.TransformPoint(_rigidbody.position), FootstepAudioVolume);
             }
+        }
+        ///ANIMATION
+        private void SwitchIdleAnimation()
+        {
+            if (_oldInputMove != _input.move)
+            {
+                InitIdleAnimation();
+                if (_hasAnimator)
+                {
+                    _animator.SetFloat(_animIDIdleState, _currentIdleState);
+                }
+            }
+            if (_inAnIdleStateTimeoutDelta <= 0)
+            {
+                float _idleBlendExpPowered = Mathf.Pow(_betweenIdleStatesTimeoutDelta / SecondsBetweenIdleStates, IdleStateChangeRatePower);
+                float currentIdleStateReal = _idleBlendExpPowered * _currentIdleState + (1 - _idleBlendExpPowered) * _nextIdleState;
+                if (_hasAnimator)
+                {
+                    _animator.SetFloat(_animIDIdleState, currentIdleStateReal);
+                }
+                if (_betweenIdleStatesTimeoutDelta <= 0.0f)
+                {
+                    InitIdleAnimation(_nextIdleState);
+                }
+                _betweenIdleStatesTimeoutDelta -= Time.deltaTime;
+            }
+            _inAnIdleStateTimeoutDelta -= Time.deltaTime;
         }
     }
 }
