@@ -41,7 +41,8 @@ namespace StarterAssets
         public float RotationSmoothTime = 0.12f;
         [Tooltip("Acceleration and deceleration")]
         public float SpeedChangeRate = 10.0f;
-
+        [Tooltip("Power in the math expression used for interpolating speed values. Linear if 1, quadratic if 2 ,cubic if 3 and so on")]
+        public uint SpeedChangeRatePower = 1;
         [Header("Jumping")]
         [Tooltip("Whether the player should jump on input")]
         public bool CanJump = true;
@@ -50,7 +51,7 @@ namespace StarterAssets
         [Tooltip("The character uses its own gravity value. The engine default is -9.81f")]
         public Vector3 Gravity = Physics.gravity;
         [Tooltip("Time required to pass before being able to jump again. Set to 0f to instantly jump again")]
-        public float JumpTimeout = 0.50f;
+        public float JumpTimeout = 0f;
         [Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
         public float FallTimeout = 0.15f;
 
@@ -167,6 +168,8 @@ namespace StarterAssets
         private Vector3 _axis2rotateUpForOrientationAround;
         private Vector3 _refVectorOnVWPlane;
         private Vector2 _oldInputMove = Vector2.zero;
+        private bool _oldInputSprint = false;
+        private bool _oldGrounded = true;
         private float _lastHorizontalSpeedBeforeJump = 0;
         private float _animationBlend;
         private float _targetRotation = 0.0f;
@@ -199,6 +202,7 @@ namespace StarterAssets
         private int _animIDMotionSpeed;
         private int _animIDClimb;
         private int _animIDIdleState;
+        private int _animIDStopped;
 
         private void Awake()
         {
@@ -292,6 +296,7 @@ namespace StarterAssets
             _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
             _animIDClimb = Animator.StringToHash("Climb");
             _animIDIdleState = Animator.StringToHash("IdleState");
+            _animIDStopped = Animator.StringToHash("Stopped");
         }
         private void InitIdleAnimation(uint currentIdleState = 0)
         {
@@ -301,6 +306,12 @@ namespace StarterAssets
             _inAnIdleStateTimeoutDelta = SecondsInTheIdleStates[_currentIdleState];
         }
         ///GENERIC
+        private float Eerp(float a, float b, float t, float p)
+        {
+            t = Mathf.Clamp(t, 0, 1);
+            float expPowered = Mathf.Pow(t, p);
+            return (1 - expPowered) * a + expPowered * b;
+        }
         private void Orient(Vector3 forward, Vector3 up, bool view = false)
         {
             if (view)
@@ -412,7 +423,6 @@ namespace StarterAssets
             }
             // else if (!Orienting && OrientRayIntersects && Mathf.Abs(1 - Vector3.Dot(_orientHit.normal, UpForOrientation)) > Epsilon)
             // {
-            //     // Debug.Log("wtf");
             //     Orienting = true;
             //     upForMovement = _orientHit.normal;
             // }
@@ -473,6 +483,14 @@ namespace StarterAssets
                 {
                     targetSpeed = 0.0f;
                     SwitchIdleAnimation();
+                    if (_hasAnimator)
+                    {
+                        if (_oldInputMove == _input.move)
+                        {
+                            Debug.Log(_oldInputSprint);
+                        }
+                        _animator.SetBool(_animIDStopped, _oldInputSprint && _oldInputMove != _input.move);
+                    }
                 }
 
                 // a reference to the players current horizontal velocity
@@ -485,8 +503,8 @@ namespace StarterAssets
                 {
                     // creates curved result rather than a linear one giving a more organic speed change
                     // note T in Lerp is clamped, so we don't need to clamp our speed
-                    _horizontalSpeed = Mathf.Lerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
-                        Time.deltaTime * SpeedChangeRate);
+                    _horizontalSpeed = Eerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
+                        Time.deltaTime * SpeedChangeRate, SpeedChangeRatePower);
                     // round speed to 3 decimal places
                     _horizontalSpeed = Mathf.Round(_horizontalSpeed * 1000f) / 1000f;
                 }
@@ -499,7 +517,7 @@ namespace StarterAssets
             {
                 _horizontalSpeed = _lastHorizontalSpeedBeforeJump;
             }
-            _animationBlend = Mathf.Lerp(_animationBlend, targetSpeed, Time.deltaTime * SpeedChangeRate);
+            _animationBlend = Eerp(_animationBlend, targetSpeed, Time.deltaTime * SpeedChangeRate, SpeedChangeRatePower);
             if (_animationBlend < Epsilon) _animationBlend = 0f;
 
             // update animator if using character
@@ -512,6 +530,7 @@ namespace StarterAssets
             Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
             _horizontalVelocity = targetDirection * _horizontalSpeed;
             _oldInputMove = _input.move;
+            _oldInputSprint = _input.sprint;
         }
         private void SetVerticalVelocity(in Vector3 upForOrientation)
         {
@@ -531,7 +550,6 @@ namespace StarterAssets
                 // Jump
                 if (CanJump && _input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
-                    _lastHorizontalSpeedBeforeJump = _horizontalVelocity.magnitude;
                     // the square root of 2 * G * H = how much velocity needed to reach desired height
                     _verticalVelocity = Mathf.Sqrt(2f * Gravity.magnitude * JumpHeight) * upForOrientation;
                     // update animator if using character
@@ -553,6 +571,10 @@ namespace StarterAssets
             }
             else
             {
+                if (_oldGrounded)
+                {
+                    _lastHorizontalSpeedBeforeJump = _horizontalVelocity.magnitude;
+                }
                 // reset the jump timeout timer
                 _jumpTimeoutDelta = JumpTimeout;
 
@@ -572,6 +594,7 @@ namespace StarterAssets
             }
 
             _verticalVelocity += _gravity * Time.deltaTime;
+            _oldGrounded = Grounded;
         }
         private void SetVelocity(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
@@ -836,8 +859,7 @@ namespace StarterAssets
             }
             if (_inAnIdleStateTimeoutDelta <= 0)
             {
-                float _idleBlendExpPowered = Mathf.Pow(_betweenIdleStatesTimeoutDelta / SecondsBetweenIdleStates, IdleStateChangeRatePower);
-                float currentIdleStateReal = _idleBlendExpPowered * _currentIdleState + (1 - _idleBlendExpPowered) * _nextIdleState;
+                float currentIdleStateReal = Eerp(_nextIdleState, _currentIdleState, _betweenIdleStatesTimeoutDelta / SecondsBetweenIdleStates, IdleStateChangeRatePower);
                 if (_hasAnimator)
                 {
                     _animator.SetFloat(_animIDIdleState, currentIdleStateReal);
