@@ -485,10 +485,6 @@ namespace StarterAssets
                     SwitchIdleAnimation();
                     if (_hasAnimator)
                     {
-                        if (_oldInputMove == _input.move)
-                        {
-                            Debug.Log(_oldInputSprint);
-                        }
                         _animator.SetBool(_animIDStopped, _oldInputSprint && _oldInputMove != _input.move);
                     }
                 }
