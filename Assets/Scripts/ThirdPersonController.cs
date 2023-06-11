@@ -1,11 +1,8 @@
 ﻿using UnityEngine;
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
 using UnityEngine.InputSystem;
-using System.Collections.Generic;
+using System;
 #endif
-
-/* Note: animations are called via the controller for both the character and capsule using animator null checks
- */
 
 namespace StarterAssets
 {
@@ -29,6 +26,17 @@ namespace StarterAssets
         public Vector3 ForwardForOrientation = Vector3.forward;
 
         [Space(10)]
+        [Header("Player")]
+        [Tooltip("Health of the player")]
+        public float Health = 100.0f;
+
+        [Space(10)]
+        [Header("High Fall")]
+        [Tooltip("The minimum height that the player takes a damage when fallen from. The player transitions into special air and hard landing animations after this height")]
+        public float FallDamageHeight = 2.0f;
+        [Tooltip("Timeout in seconds before the player can do a roll on the ground")]
+        public float RollTimeout = 5.0f;
+
         [Header("Basic Movement")]
         [Tooltip("Whether the player should move on input")]
         public bool CanMove = true;
@@ -50,9 +58,9 @@ namespace StarterAssets
         public float JumpHeight = 1.2f;
         [Tooltip("The character uses its own gravity value. The engine default is -9.81f")]
         public Vector3 Gravity = Physics.gravity;
-        [Tooltip("Time required to pass before being able to jump again. Set to 0f to instantly jump again")]
+        [Tooltip("Time required to pass in seconds before being able to jump again. Set to 0f to instantly jump again")]
         public float JumpTimeout = 0f;
-        [Tooltip("Time required to pass before entering the fall state. Useful for walking down stairs")]
+        [Tooltip("Time required to pass in seconds before entering the fall state. Useful for walking down stairs")]
         public float FallTimeout = 0.15f;
 
         [Space(10)]
@@ -61,7 +69,7 @@ namespace StarterAssets
         public float ClimbSpeed = 2.0f;
         [Tooltip("Sprint speed of the character in m/s when climbing")]
         public float ClimbSprintMultiplier = 2f;
-        [Tooltip("Time required to pass before being able to climb again.")]
+        [Tooltip("Time required to pass in seconds before being able to climb again.")]
         public float ClimbTimeout = 0.15f;
         [Tooltip("Upward offset from which the climb ray is fired from")]
         public float ClimbRayOffset = 0.1f;
@@ -139,8 +147,9 @@ namespace StarterAssets
         public float[] SecondsInTheIdleStates = { 30f, 3f, 1f };
         [Tooltip("Power in the math expression used for blending between idle states. Linear if 1, quadratic if 2 ,cubic if 3 and so on")]
         public uint IdleStateChangeRatePower = 10;
+        [Tooltip("The duration in seconds for rejecting input while animating. The default duration of animations are 2 seconds, which is preferred.")]
+        public float LockWhileAnimatingTimeout = 2.0f;
         ///GENERIC
-        private bool _hasAnimator;
         private bool IsCurrentDeviceMouse
         {
             get
@@ -152,8 +161,8 @@ namespace StarterAssets
 #endif
             }
         }
-        private uint _currentIdleState = 0;
-        private uint _nextIdleState = 1;
+        private uint _currentIdleState;
+        private uint _nextIdleState;
         ///CAMERA
         private float _cinemachineTargetYaw;
         private float _cinemachineTargetPitch;
@@ -170,6 +179,8 @@ namespace StarterAssets
         private Vector2 _oldInputMove = Vector2.zero;
         private bool _oldInputSprint = false;
         private bool _oldGrounded = true;
+        private bool _highFall = false;
+        private bool _crouchPressedWhenRolling = false;
         private float _lastHorizontalSpeedBeforeJump = 0;
         private float _animationBlend;
         private float _targetRotation = 0.0f;
@@ -183,8 +194,7 @@ namespace StarterAssets
         private float _jumpTimeoutDelta;
         private float _fallTimeoutDelta;
         private float _climbTimeoutDelta;
-        private float _betweenIdleStatesTimeoutDelta;
-        private float _inAnIdleStateTimeoutDelta;
+        private float _rollTimeoutDelta;
         ///COMPONENTS
 #if ENABLE_INPUT_SYSTEM && STARTER_ASSETS_PACKAGES_CHECKED
         private PlayerInput _playerInput;
@@ -194,15 +204,25 @@ namespace StarterAssets
         private StarterAssetsInputs _input;
         private GameObject _mainCamera;
         private SkinnedMeshRenderer _renderer;
+        ///ANIMATION
+        private bool _hasAnimator;
+        private Timer _animationTimer;
+        private Timer _idleStateAnimationTimer;
+        private Timer _betweenIdleStatesAnimationTimer;
         ///ANIMATION IDS
         private int _animIDSpeed;
+        private int _animIDMotionSpeed;
         private int _animIDGrounded;
+        private int _animIDCrouch;
+        private int _animIDRoll;
         private int _animIDJump;
         private int _animIDFreeFall;
-        private int _animIDMotionSpeed;
+        private int _animIDHighFall;
         private int _animIDClimb;
-        private int _animIDIdleState;
         private int _animIDStopped;
+        private int _animIDIdleState;
+
+
 
         private void Awake()
         {
@@ -236,8 +256,17 @@ namespace StarterAssets
             _jumpTimeoutDelta = JumpTimeout;
             _fallTimeoutDelta = FallTimeout;
             _climbTimeoutDelta = ClimbTimeout;
+            _rollTimeoutDelta = RollTimeout;
+            //init timers
+            _betweenIdleStatesAnimationTimer = new Timer(() => InitIdleAnimation(_nextIdleState), SecondsBetweenIdleStates);
+            _idleStateAnimationTimer = new Timer(AnimateIdleAnimation);
+            _animationTimer = new Timer(() =>
+            {
+                _highFall = false;
+                CanMove = true;
+                CanJump = true;
+            }, LockWhileAnimatingTimeout);
             InitIdleAnimation();
-
             _upForOrientation = UpForOrientation;
             _upForOrientationCamera = _upForOrientation;
             Orient(ForwardForOrientation, _upForOrientation);
@@ -255,13 +284,20 @@ namespace StarterAssets
             HandleClimb(ref _upForOrientation, ref _upForMovement, ref _upForOrientationCamera);
             SetUpForMovement(_upForOrientation, ref _upForMovement);
             UpdateCameraPosition();
+            SetAnimationsWhenNotMoving();
+
+            if (Grounded && _hasAnimator)
+            {
+                _animator.SetBool(_animIDCrouch, _input.crouch);
+            }
+
+            HandleHighFall();
             SetVelocity(_upForOrientation, _upForMovement);
         }
 
 
         private void FixedUpdate()
         {
-
             // if (Orienting)
             // {
             //     if (OrientRayIntersects && Mathf.Abs(1 - Vector3.Dot(_orientHit.normal, UpForOrientation)) > Epsilon)
@@ -290,20 +326,16 @@ namespace StarterAssets
         private void AssignAnimationIDs()
         {
             _animIDSpeed = Animator.StringToHash("Speed");
+            _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
             _animIDGrounded = Animator.StringToHash("Grounded");
+            _animIDCrouch = Animator.StringToHash("Crouch");
+            _animIDRoll = Animator.StringToHash("Roll");
             _animIDJump = Animator.StringToHash("Jump");
             _animIDFreeFall = Animator.StringToHash("FreeFall");
-            _animIDMotionSpeed = Animator.StringToHash("MotionSpeed");
+            _animIDHighFall = Animator.StringToHash("HighFall");
             _animIDClimb = Animator.StringToHash("Climb");
-            _animIDIdleState = Animator.StringToHash("IdleState");
             _animIDStopped = Animator.StringToHash("Stopped");
-        }
-        private void InitIdleAnimation(uint currentIdleState = 0)
-        {
-            _currentIdleState = currentIdleState;
-            _nextIdleState = (_currentIdleState == 0) ? 1 : (_currentIdleState % ((uint)SecondsInTheIdleStates.Length - 1)) + 1;
-            _betweenIdleStatesTimeoutDelta = SecondsBetweenIdleStates;
-            _inAnIdleStateTimeoutDelta = SecondsInTheIdleStates[_currentIdleState];
+            _animIDIdleState = Animator.StringToHash("IdleState");
         }
         ///GENERIC
         private float Eerp(float a, float b, float t, float p)
@@ -312,16 +344,9 @@ namespace StarterAssets
             float expPowered = Mathf.Pow(t, p);
             return (1 - expPowered) * a + expPowered * b;
         }
-        private void Orient(Vector3 forward, Vector3 up, bool view = false)
+        private void Orient(Vector3 forward, Vector3 up)
         {
-            if (view)
-            {
-                _mainCamera.transform.LookAt(transform.position + forward, up);
-            }
-            else
-            {
-                transform.LookAt(transform.position + forward, up);
-            }
+            transform.LookAt(transform.position + forward, up);
         }
         private void OrientWithGravity(in Vector3 upForOrientation)
         {
@@ -370,49 +395,22 @@ namespace StarterAssets
             if (lfAngle > 360f) lfAngle -= 360f;
             return Mathf.Clamp(lfAngle, lfMin, lfMax);
         }
-        enum ZeroOutVerticalVelocityDirection
-        {
-            OnlyNegativeReference,
-            NegativeAndPositiveReference,
-            AllDirections,
-        }
         private void zeroOutVelocity()
         {
-            zeroOutVectorInDirection(ref _horizontalVelocity);
-            zeroOutVectorInDirection(ref _verticalVelocity);
+            zeroOutVectorInAllDirections(ref _horizontalVelocity);
+            zeroOutVectorInAllDirections(ref _verticalVelocity);
         }
-        private void zeroOutVectorInDirection(
-            ref Vector3 vector,
-            in ZeroOutVerticalVelocityDirection direction = ZeroOutVerticalVelocityDirection.AllDirections,
-            in Vector3? value2subtractFrom = null,
-            in Vector3? directionReference = null
-            )
+        private void zeroOutVectorInAllDirections(ref Vector3 vector)
         {
-            switch (direction)
+            vector = Vector3.zero;
+        }
+        private void zeroOutVectorInNegativeDirection(ref Vector3 vector, in Vector3 value2subtractFrom, in Vector3 directionReference)
+        {
+            Vector3 vectorUp = orthogonalizeForwardReturnUp(value2subtractFrom, directionReference);
+            float cosThetaBetween = Vector3.Dot(vectorUp.normalized, directionReference);
+            if (cosThetaBetween > -1 - Epsilon && cosThetaBetween < -1 + Epsilon)
             {
-                case ZeroOutVerticalVelocityDirection.AllDirections:
-                    vector = Vector3.zero;
-                    break;
-                default:
-                    Vector3 _value2subtractFrom = value2subtractFrom ?? Vector3.zero;
-                    Vector3 _directionReference = directionReference ?? Vector3.zero;
-
-                    Vector3 _vectorUp = orthogonalizeForwardReturnUp(_value2subtractFrom, _directionReference);
-                    float cosThetaBetween = Vector3.Dot(_vectorUp.normalized, _directionReference);
-                    if (
-                        (
-                            direction == ZeroOutVerticalVelocityDirection.OnlyNegativeReference &&
-                            Mathf.Abs(cosThetaBetween) > -1 - Epsilon && cosThetaBetween < -1 + Epsilon
-                        ) ||
-                        (
-                            direction == ZeroOutVerticalVelocityDirection.NegativeAndPositiveReference &&
-                            Mathf.Abs(cosThetaBetween) > 1 - Epsilon && Mathf.Abs(cosThetaBetween) < 1 + Epsilon
-                        )
-                    )
-                    {
-                        vector = _value2subtractFrom - _vectorUp;
-                    }
-                    break;
+                vector = value2subtractFrom - vectorUp;
             }
         }
         private void SetUpForMovement(in Vector3 upForOrientation, ref Vector3 upForMovement)
@@ -440,15 +438,15 @@ namespace StarterAssets
             // if there is a move input rotate player when the player is moving
             if (_input.move != Vector2.zero)
             {
-                Vector3 _mainCameraForward = orthogonalizeForwardReturnForward(_mainCamera.transform.forward, upForOrientation).normalized;
-                if (_mainCameraForward == Vector3.zero)
+                Vector3 mainCameraForward = orthogonalizeForwardReturnForward(_mainCamera.transform.forward, upForOrientation).normalized;
+                if (mainCameraForward == Vector3.zero)
                 {
-                    _mainCameraForward = Vector3.Cross(upForOrientation, transform.right).normalized;
+                    mainCameraForward = Vector3.Cross(upForOrientation, transform.right).normalized;
                 }
 
                 (float _mainCameraY, Vector3 _) = getAngleBetweenTwoVectors(
                     _refVectorOnVWPlane,
-                    _mainCameraForward,
+                    mainCameraForward,
                     upForOrientation
                     );
                 (float _transformY, Vector3 _) = getAngleBetweenTwoVectors(
@@ -467,7 +465,7 @@ namespace StarterAssets
         }
         private void SetHorizontalVelocity(in Vector3 upForOrientation, in Vector3 upForMovement)
         {
-            float _horizontalSpeed;
+            float horizontalSpeed;
             float targetSpeed = MoveSpeed;
             if (_input.sprint) targetSpeed *= MoveSprintMultiplier;
             float inputMagnitude = _input.analogMovement ? _input.move.magnitude : 1f;
@@ -482,11 +480,6 @@ namespace StarterAssets
                 if (_input.move == Vector2.zero)
                 {
                     targetSpeed = 0.0f;
-                    SwitchIdleAnimation();
-                    if (_hasAnimator)
-                    {
-                        _animator.SetBool(_animIDStopped, _oldInputSprint && _oldInputMove != _input.move);
-                    }
                 }
 
                 // a reference to the players current horizontal velocity
@@ -499,19 +492,19 @@ namespace StarterAssets
                 {
                     // creates curved result rather than a linear one giving a more organic speed change
                     // note T in Lerp is clamped, so we don't need to clamp our speed
-                    _horizontalSpeed = Eerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
+                    horizontalSpeed = Eerp(currentHorizontalSpeed, targetSpeed * inputMagnitude,
                         Time.deltaTime * SpeedChangeRate, SpeedChangeRatePower);
                     // round speed to 3 decimal places
-                    _horizontalSpeed = Mathf.Round(_horizontalSpeed * 1000f) / 1000f;
+                    horizontalSpeed = Mathf.Round(horizontalSpeed * 1000f) / 1000f;
                 }
                 else
                 {
-                    _horizontalSpeed = targetSpeed;
+                    horizontalSpeed = targetSpeed;
                 }
             }
             else
             {
-                _horizontalSpeed = _lastHorizontalSpeedBeforeJump;
+                horizontalSpeed = _lastHorizontalSpeedBeforeJump;
             }
             _animationBlend = Eerp(_animationBlend, targetSpeed, Time.deltaTime * SpeedChangeRate, SpeedChangeRatePower);
             if (_animationBlend < Epsilon) _animationBlend = 0f;
@@ -524,9 +517,7 @@ namespace StarterAssets
             }
 
             Vector3 targetDirection = getHorizontalDirection(upForOrientation, upForMovement);
-            _horizontalVelocity = targetDirection * _horizontalSpeed;
-            _oldInputMove = _input.move;
-            _oldInputSprint = _input.sprint;
+            _horizontalVelocity = targetDirection * horizontalSpeed;
         }
         private void SetVerticalVelocity(in Vector3 upForOrientation)
         {
@@ -541,8 +532,8 @@ namespace StarterAssets
                     _animator.SetBool(_animIDJump, false);
                     _animator.SetBool(_animIDFreeFall, false);
                 }
-                zeroOutVectorInDirection(ref _gravity, ZeroOutVerticalVelocityDirection.OnlyNegativeReference, Gravity, upForOrientation);
-                zeroOutVectorInDirection(ref _verticalVelocity, ZeroOutVerticalVelocityDirection.OnlyNegativeReference, _verticalVelocity, upForOrientation);
+                zeroOutVectorInNegativeDirection(ref _gravity, Gravity, upForOrientation);
+                zeroOutVectorInNegativeDirection(ref _verticalVelocity, _verticalVelocity, upForOrientation);
                 // Jump
                 if (CanJump && _input.jump && _jumpTimeoutDelta <= 0.0f)
                 {
@@ -556,7 +547,7 @@ namespace StarterAssets
                 }
 
                 // jump timeout
-                if (_jumpTimeoutDelta >= 0.0f)
+                if (_jumpTimeoutDelta > 0.0f)
                 {
                     _jumpTimeoutDelta -= Time.deltaTime;
                 }
@@ -567,6 +558,7 @@ namespace StarterAssets
             }
             else
             {
+                // just risen from ground
                 if (_oldGrounded)
                 {
                     _lastHorizontalSpeedBeforeJump = _horizontalVelocity.magnitude;
@@ -575,11 +567,11 @@ namespace StarterAssets
                 _jumpTimeoutDelta = JumpTimeout;
 
                 // fall timeout
-                if (_fallTimeoutDelta >= 0.0f)
+                if (_fallTimeoutDelta > 0.0f)
                 {
                     _fallTimeoutDelta -= Time.deltaTime;
                 }
-                else if (!Climbing && _hasAnimator)
+                else if (_hasAnimator)
                 {
                     _animator.SetBool(_animIDFreeFall, true);
                 }
@@ -602,9 +594,9 @@ namespace StarterAssets
         }
         private void Move()
         {
-            Vector3 _velocity = _horizontalVelocity + _verticalVelocity;
+            Vector3 velocity = _horizontalVelocity + _verticalVelocity;
             // move the player
-            _rigidbody.velocity = _velocity;
+            _rigidbody.velocity = velocity;
         }
         ///CLIMBING
         private void HandleClimb(ref Vector3 upForOrientation, ref Vector3 upForMovement, ref Vector3 upForOrientationCamera)
@@ -634,7 +626,6 @@ namespace StarterAssets
             {
                 Climbing = true;
                 CanMove = false;
-
                 _upForOrientationTarget = _climbHit.normal;
                 if (_hasAnimator)
                 {
@@ -649,13 +640,20 @@ namespace StarterAssets
                 _upForOrientationAngleChangePerTick = (totalOrientAngle * Time.deltaTime) / SecondsToCompleteUpForOrientationAngleChange;
                 _climbTimeoutDelta = ClimbTimeout;
             }
-            _climbTimeoutDelta -= Time.deltaTime;
+            if (_climbTimeoutDelta > 0.0f)
+            {
+                _climbTimeoutDelta -= Time.deltaTime;
+            }
         }
         ///CAMERA
+        private void OrientCamera(Vector3 forward, Vector3 up)
+        {
+            _mainCamera.transform.LookAt(transform.position + forward, up);
+        }
         private void OrientCameraFacingForward(in Vector3 upForOrientation)
         {
             Vector3 newForward = Vector3.Cross(transform.right, upForOrientation);
-            Orient(newForward, upForOrientation, true);
+            OrientCamera(newForward, upForOrientation);
         }
         private void UpdateCameraPosition()
         {
@@ -830,7 +828,7 @@ namespace StarterAssets
             {
                 if (FootstepAudioClips.Length > 0)
                 {
-                    var index = Random.Range(0, FootstepAudioClips.Length);
+                    var index = UnityEngine.Random.Range(0, FootstepAudioClips.Length);
                     AudioSource.PlayClipAtPoint(FootstepAudioClips[index], transform.TransformPoint(_rigidbody.position), FootstepAudioVolume);
                 }
             }
@@ -843,9 +841,16 @@ namespace StarterAssets
             }
         }
         ///ANIMATION
+        private void InitIdleAnimation(uint currentIdleState = 0)
+        {
+            _currentIdleState = currentIdleState;
+            _nextIdleState = (_currentIdleState == 0) ? 1 : (_currentIdleState % ((uint)SecondsInTheIdleStates.Length - 1)) + 1;
+            _betweenIdleStatesAnimationTimer.Reset();
+            _idleStateAnimationTimer.SetTimeLeft(SecondsInTheIdleStates[_currentIdleState]);
+        }
         private void SwitchIdleAnimation()
         {
-            if (_oldInputMove != _input.move)
+            if (Grounded && (_oldInputMove != _input.move || !_oldGrounded))
             {
                 InitIdleAnimation();
                 if (_hasAnimator)
@@ -853,20 +858,112 @@ namespace StarterAssets
                     _animator.SetFloat(_animIDIdleState, _currentIdleState);
                 }
             }
-            if (_inAnIdleStateTimeoutDelta <= 0)
+            _idleStateAnimationTimer.Tick(false);
+        }
+        private void AnimateIdleAnimation()
+        {
+            float currentIdleStateReal = Eerp(
+                _nextIdleState, _currentIdleState,
+                _betweenIdleStatesAnimationTimer.timeLeft / SecondsBetweenIdleStates,
+                IdleStateChangeRatePower);
+            if (_hasAnimator)
             {
-                float currentIdleStateReal = Eerp(_nextIdleState, _currentIdleState, _betweenIdleStatesTimeoutDelta / SecondsBetweenIdleStates, IdleStateChangeRatePower);
+                _animator.SetFloat(_animIDIdleState, currentIdleStateReal);
+            }
+            _betweenIdleStatesAnimationTimer.Tick();
+        }
+        private void StartStoppedAnimation()
+        {
+            if (_hasAnimator)
+            {
+                _animator.SetBool(_animIDStopped, _oldInputSprint && _oldInputMove != _input.move);
+            }
+        }
+        private void SetAnimationsWhenNotMoving()
+        {
+            if (_input.move == Vector2.zero)
+            {
+                SwitchIdleAnimation();
+                StartStoppedAnimation();
+            }
+            _oldInputMove = _input.move;
+            _oldInputSprint = _input.sprint;
+        }
+        private void RejectInputWhile(Action before, Action after, ref float durationDelta, float duration)
+        {
+            if (durationDelta == LockWhileAnimatingTimeout)
+            {
+                CanMove = false;
+                CanJump = false;
+                before();
+            }
+            if (durationDelta > 0.0f)
+            {
+                durationDelta -= Time.deltaTime;
+            }
+            else
+            {
+                after();
+                CanMove = true;
+                CanJump = true;
+                durationDelta = duration;
+            }
+        }
+        //HIGH FALL
+        private void HandleHighFall()
+        {
+            if (Grounded && _highFall)
+            {
+                //just fell on the ground
+                if (!_oldGrounded)
+                {
+                    CanMove = false;
+                    CanJump = false;
+                    _crouchPressedWhenRolling = false;
+                    _rollTimeoutDelta = RollTimeout;
+                }
+                if (_rollTimeoutDelta > 0.0f)
+                {
+                    if (_input.crouch)
+                    {
+                        _crouchPressedWhenRolling = true;
+                    }
+                    _rollTimeoutDelta -= Time.deltaTime;
+                }
+                else
+                {
+                    if (_crouchPressedWhenRolling)
+                    {
+                        //successful landing, plunge forward while rolling
+                    }
+                    else
+                    {
+                        //hard landing
+                    }
+
+
+                    if (_animationTimer.state == Timer.TimerState.Set)
+                    {
+                        // CanMove = false;
+                        // CanJump = false;
+                        if (_hasAnimator)
+                        {
+                            _animator.SetBool(_animIDHighFall, false);
+                            _animator.SetBool(_animIDRoll, _crouchPressedWhenRolling);
+                        }
+                    }
+                    _animationTimer.Tick();
+                }
+            }
+            else if (Mathf.Pow(_verticalVelocity.magnitude, 2) / (2 * Gravity.magnitude) >= FallDamageHeight)
+            {
+                _highFall = true;
                 if (_hasAnimator)
                 {
-                    _animator.SetFloat(_animIDIdleState, currentIdleStateReal);
+                    _animator.SetBool(_animIDHighFall, _highFall);
                 }
-                if (_betweenIdleStatesTimeoutDelta <= 0.0f)
-                {
-                    InitIdleAnimation(_nextIdleState);
-                }
-                _betweenIdleStatesTimeoutDelta -= Time.deltaTime;
             }
-            _inAnIdleStateTimeoutDelta -= Time.deltaTime;
         }
+
     }
 }
