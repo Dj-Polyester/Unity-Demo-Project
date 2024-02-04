@@ -1,3 +1,3 @@
-Unfortunately Unity insists on not extending their `CharacterController`, which is only capable of moving the character in a single plane. 
-The project includes a player controller that has physics properties (extends the `RigidBody`). The controller comes with features such as 
-climbing and slope walking. It takes an up vector, updating the front and right vectors accordingly at each frame. It also uses some animations from [Mixamo](https://www.mixamo.com/).
+Unfortunately Unity insists on not improving their `CharacterController`, which is only capable of moving the character in a single plane. 
+Even though most of the games use the basic controller schemes, with new games and their technology the need for different type of controllers emerges. Unity at least 
+should bring new different types of controllers, or have more options for their `CharacterController`. The project includes a player controller that does that latter by extending a `RigidBody` object with a variety of parameters. One of these parameters is the rotation in space (up vector). Taking an up vector it updates its front and right vectors accordingly at each frame. It has many more parameters built-in coming with base features such as slope walking, and advanced features such as climbing. It also adds some animations as a flavor from [Mixamo](https://www.mixamo.com/).
